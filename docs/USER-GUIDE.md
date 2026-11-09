@@ -168,6 +168,8 @@ that pairing, you can also delete `~/.ssh/id_rsa_frame_devkit` and
 | Any server with a DeoVR feed or HereSphere API | Sources › Add source › DeoVR or HereSphere |
 | NAS / Windows share | Sources › Add source › SMB share: a whole server (`smb://nas/`, which lists the shares your login, or a guest without one, may open) or one share or folder (`smb://nas/videos`) |
 | Nextcloud and other WebDAV | Sources › Add source › WebDAV |
+| OneDrive | Sources › Add source › OneDrive › Get pairing code; enter the code at microsoft.com/devicelogin on your phone or computer (see [Connecting OneDrive](#connecting-onedrive)) |
+| iCloud Drive | Through a PC or NAS running rclone, as a WebDAV source (see [iCloud Drive](#icloud-drive)) |
 | Jellyfin, Emby | Sources › Add source › Jellyfin / Emby (a password, or Quick Connect on Jellyfin) |
 | Plex | Sources › Add source › Plex › Link with code; enter the code at plex.tv/link on your phone or computer, then choose a server |
 | Serviio and other DLNA servers (including Plex with DLNA enabled) | Sources › Add source › DLNA › Search the network |
@@ -333,6 +335,60 @@ firewall permission to the server's port.
 the selected server's media connection; entering `app.plex.tv` in the
 manual address field starts account linking. Plex Home profile switching,
 live TV, music, photos, cloud Watchlist and casting are not supported.
+
+### Connecting OneDrive
+
+Under **Sources › Add source › OneDrive**, press **Get pairing code**, then
+visit [microsoft.com/devicelogin](https://microsoft.com/devicelogin) on your
+phone or computer, enter the code shown in FramePlayerX and sign in to your
+Microsoft account. The headset waits for that, shows who signed in, and
+**Save** adds the source. Nothing you type in the headset is a password: it
+only ever sees the code and the tokens Microsoft gives it, which only read
+your files and renew themselves. They are kept with your other sources'
+logins (readable only by you); if Microsoft stops accepting them (a changed
+password, access taken back under account.microsoft.com), edit the source
+and sign in again.
+
+Folders list as they do in OneDrive. Videos stream straight from Microsoft's
+servers with the same read-ahead buffer as every network source; the links
+Microsoft gives for a file last about an hour, so a long video quietly gets
+a new one while it plays. **Parallel downloads** often helps OneDrive.
+Subtitles and haptic scripts next to a video are found as in any folder.
+
+The sign-in goes through an app registered with Microsoft. A build made
+without one asks for its **App (client) ID**. To make one, free, with any
+Microsoft account:
+
+1. Open [portal.azure.com](https://portal.azure.com) › **App registrations**
+   › **New registration**. Any name; under **Supported account types**
+   choose **Personal Microsoft accounts only**; no redirect URI. Register.
+2. On the app's **Authentication** page, set **Allow public client flows**
+   to **Yes** and save.
+3. On **API permissions**, **Add a permission** › **Microsoft Graph** ›
+   **Delegated permissions**: tick **Files.Read** and **offline_access**.
+4. Copy the **Application (client) ID** from **Overview** into
+   FramePlayerX's field (once per source), or build it in with
+   `FRAMEPLAYERX_ONEDRIVE_CLIENT_ID=<id>` set when compiling, so the field
+   goes away.
+
+Work or school accounts need an app registered for them (**Accounts in any
+organizational directory and personal Microsoft accounts**) and the source's
+`tenant` set to `common` in `sources.json`; their admin may have to allow it.
+
+### iCloud Drive
+
+Apple has no way for other apps to read iCloud Drive, so the headset can't
+sign in to it itself. [rclone](https://rclone.org) can, on a PC, Mac or NAS
+that stays on: set up its [iCloud Drive remote](https://rclone.org/iclouddrive/)
+(**Advanced Data Protection** has to be off for it), then serve it as WebDAV:
+
+```bash
+rclone serve webdav icloud: --addr :8080 --user frame --pass <a password> --vfs-cache-mode full
+```
+
+Add it under **Sources › Add source › WebDAV** as `http://<that machine>:8080/`
+with that user and password. The same works for Google Drive, Dropbox and
+other clouds rclone knows.
 
 ### Locking a source with a PIN
 

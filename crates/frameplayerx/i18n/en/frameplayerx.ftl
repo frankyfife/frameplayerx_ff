@@ -1378,3 +1378,17 @@ plex-connection-manual-local-desc = For an access token, use a LAN IP address wi
 plex-test-required = Connect to a server before saving.
 # Plex edit form: changing credentials keeps the existing source separate.
 plex-new-account-source = Linking again or replacing the token adds a separate source and keeps this one.
+
+## OneDrive source setup
+
+source-kind-onedrive-desc = Your Microsoft OneDrive: sign in with a code on your phone or computer, no password typed here
+# Short: the Microsoft account the source signs in to.
+onedrive-sign-in = Microsoft account
+onedrive-sign-in-desc = Get a code, then enter it on your phone or computer at the address shown and sign in to Microsoft.
+onedrive-waiting = On your phone or computer, visit this address, enter the code and sign in:
+onedrive-expired = This code has expired. Get another code and try again.
+onedrive-signed-in = Signed in as { $account }
+# Short: the ID of the Azure app registration the headset signs in as.
+onedrive-client-id = App (client) ID
+onedrive-client-id-desc = This build has no OneDrive app of its own: enter the app (client) ID of your Azure app registration. The user guide says how to make one.
+onedrive-sign-in-required = Sign in to your Microsoft account before saving.

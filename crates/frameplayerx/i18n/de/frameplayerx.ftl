@@ -997,3 +997,15 @@ plex-connection-subnet-desc = Ein anderes Subnetz oder VLAN kann für Plex als e
 plex-connection-manual-local-desc = Verwenden Sie bei einem Zugriffstoken mit „Nur lokal“ eine LAN-IP-Adresse.
 plex-test-required = Verbinden Sie sich vor dem Speichern mit einem Server.
 plex-new-account-source = Eine erneute Anmeldung oder ein neuer Token fügt eine separate Quelle hinzu und behält diese bei.
+
+## OneDrive source setup
+
+source-kind-onedrive-desc = Dein Microsoft OneDrive: Anmeldung mit einem Code am Handy oder Computer, ohne hier ein Passwort einzugeben
+onedrive-sign-in = Microsoft-Konto
+onedrive-sign-in-desc = Hol dir einen Code, gib ihn am Handy oder Computer unter der angezeigten Adresse ein und melde dich bei Microsoft an.
+onedrive-waiting = Öffne am Handy oder Computer diese Adresse, gib den Code ein und melde dich an:
+onedrive-expired = Dieser Code ist abgelaufen. Hol dir einen neuen Code und versuche es erneut.
+onedrive-signed-in = Angemeldet als { $account }
+onedrive-client-id = App-ID (Client-ID)
+onedrive-client-id-desc = Dieser Build hat keine eigene OneDrive-App: Gib die Anwendungs-ID (Client-ID) deiner Azure-App-Registrierung ein. Wie du eine anlegst, steht im Benutzerhandbuch.
+onedrive-sign-in-required = Melde dich vor dem Speichern bei deinem Microsoft-Konto an.

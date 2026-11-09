@@ -295,6 +295,8 @@ impl App {
             Action::PlexLinkStart => self.plex_link_start(),
             Action::PlexLinkPoll { generation, pin } => self.plex_link_poll(generation, pin),
             Action::PlexConnect(config) => self.plex_connect(config),
+            Action::OneDriveStart => self.onedrive_start(),
+            Action::OneDrivePoll { generation, code } => self.onedrive_poll(generation, code),
             Action::OpenWebPage(address) => self.open_web_page(address.as_str()),
             Action::SendCrashReport => self.send_crash_report(),
             Action::DismissCrashReport => self.ui.crash = None,

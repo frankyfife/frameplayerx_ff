@@ -17,6 +17,7 @@
 //! | SMB2/3 | [`smb`] | `smb://host/share/path` |
 //! | Jellyfin / Emby | [`mediabrowser`] | `mb:<url>#<kind>=<id>` |
 //! | Plex | [`plex`] | `plex://source/<source>/<machine>/<kind>/<id>` |
+//! | OneDrive | [`onedrive`] | `source://source/<source>/onedrive/<item id>` |
 //!
 //! Sources are built from a serializable [`SourceConfig`] with [`build`];
 //! [`save_configs`] / [`load_configs`] persist them (credentials included)
@@ -34,6 +35,7 @@ mod json;
 pub mod local;
 pub mod location;
 pub mod mediabrowser;
+pub mod onedrive;
 pub mod plex;
 pub mod sidecar;
 pub mod smb;
@@ -54,8 +56,8 @@ pub use catalog::{
 };
 pub use config::{
     CardRef, Credentials, DlnaConfig, FeedConfig, HttpConfig, LibraryConfig, LocalConfig,
-    MediaBrowserConfig, PlexConfig, SmbConfig, SourceConfig, SourceKind, default_config_path,
-    load_configs, save_configs,
+    MediaBrowserConfig, OneDriveConfig, PlexConfig, SmbConfig, SourceConfig, SourceKind,
+    default_config_path, load_configs, save_configs,
 };
 pub use dlna::{DlnaDevice, DlnaSource, SsdpResponse, discover};
 pub use error::{Error, Result};
@@ -67,6 +69,7 @@ pub use mediabrowser::{
     MbFacets, MbFilter, MbHome, MbItem, MbKind, MbPage, MbQuery, MbSort, MbVersion,
     MediaBrowserSource, QuickConnectState, quick_connect_initiate_url, quick_connect_poll_url,
 };
+pub use onedrive::OneDriveSource;
 pub use sidecar::{ScriptFile, Sidecars, SubtitleFile, match_sidecars};
 pub use smb::SmbSource;
 pub use transcode::TranscodeTarget;
@@ -266,6 +269,7 @@ pub fn build(config: &SourceConfig) -> Result<Box<dyn Source>> {
         SourceConfig::Smb(c) => Box::new(SmbSource::new(c)?),
         SourceConfig::MediaBrowser(c) => Box::new(MediaBrowserSource::new(c)?),
         SourceConfig::Plex(c) => Box::new(plex::PlexSource::new(c)?),
+        SourceConfig::OneDrive(c) => Box::new(OneDriveSource::new(c)?),
     })
 }
 
