@@ -335,6 +335,10 @@ enum Paired {
     /// 3D Blu-ray (MVC).
     Mvc(Box<crate::mvc::MvcDecoder>),
     FrameSequential(Box<crate::frame_seq::FrameSeqDecoder>),
+    /// Multiview HEVC (spatial video), its views decoded in software.
+    MvHevc(Box<crate::mv_hevc::MvHevcDecoder>),
+    /// Multiview HEVC rewritten for an ordinary HEVC decoder.
+    MvHevcMerged(Box<crate::mv_hevc::merged::MergedDecoder>),
 }
 
 impl Paired {
@@ -342,8 +346,32 @@ impl Paired {
         match self {
             Paired::Mvc(m) => &mut m.inner,
             Paired::FrameSequential(f) => &mut f.inner,
+            Paired::MvHevc(m) => &mut m.inner,
+            Paired::MvHevcMerged(m) => &mut m.inner,
         }
     }
+}
+
+/// How multiview HEVC decodes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MvHevcMode {
+    /// Both views, rewritten into one stream for an ordinary HEVC decoder,
+    /// the hardware one when `hw` allows ([`crate::mv_hevc::merged`]).
+    Merged(HwDecode),
+    /// Both views, by FFmpeg's HEVC decoder in software.
+    BothViews,
+    /// The base view alone, as a 2D video, on the hardware decoder when
+    /// `hw` allows: a stream too large for software
+    /// ([`crate::mv_hevc::plan`]).
+    BaseAlone(HwDecode),
+    /// The base view alone in both eyes, side by side as `BothViews` gives
+    /// them, on the hardware decoder when `hw` allows: a stream planned for
+    /// the hardware decoder that the CPU decodes in time no other way.
+    BaseTwice(HwDecode),
+    /// The base layer's keyframes alone in both eyes, for pictures of the
+    /// video: a second layer's picture of an intra access unit is predicted,
+    /// so keyframes-only decoding would leave it out.
+    Stills,
 }
 
 /// What a precise seek leaves out: frames shown mostly before its target.
@@ -399,6 +427,44 @@ impl Decoder {
         let (par, time_base) = unsafe { ((*stream).codecpar, (*stream).time_base) };
         if let Some(config) = crate::mvc::stream_config(input, index) {
             let mut dec = Self::open_mvc(par, time_base, hw, &config)?;
+            dec.origin = input.origin();
+            return Ok(dec);
+        }
+        if crate::mv_hevc::is_multiview(input, index) {
+            // As read_info says it plays: 3D side by side, or 2D when too
+            // large.
+            use crate::mv_hevc::Plan;
+            // Planned as read_info plans it, so the pictures are as wide as it
+            // says; without the hardware decoder, what the CPU decodes in
+            // time of that.
+            let plan = crate::mv_hevc::plan(input, index, crate::v4l2::enabled());
+            let software_ok = crate::mv_hevc::fits_software(input, index);
+            let in_software = if software_ok {
+                MvHevcMode::BothViews
+            } else {
+                MvHevcMode::BaseTwice(hw)
+            };
+            let mode = match plan {
+                Plan::BaseAlone => MvHevcMode::BaseAlone(hw),
+                _ if hw == HwDecode::Stills => MvHevcMode::Stills,
+                Plan::Hardware if hw != HwDecode::Off => MvHevcMode::Merged(hw),
+                _ => in_software,
+            };
+            let reversed = crate::mv_hevc::views_reversed(input, index);
+            let fps = crate::mv_hevc::frame_rate(input, index);
+            let opened = match mode {
+                MvHevcMode::Merged(hw) => {
+                    Self::open_merged(par, time_base, hw, reversed, fps, software_ok)
+                }
+                _ => Self::open_mv_hevc(par, time_base, mode, reversed),
+            };
+            let mut dec = match opened {
+                Err(e) if matches!(mode, MvHevcMode::Merged(_)) => {
+                    log::warn!("MV-HEVC for the hardware decoder: {e}; {in_software:?}");
+                    Self::open_mv_hevc(par, time_base, in_software, reversed)?
+                }
+                r => r?,
+            };
             dec.origin = input.origin();
             return Ok(dec);
         }
@@ -500,6 +566,172 @@ impl Decoder {
         Ok(dec)
     }
 
+    /// A decoder of both views of multiview HEVC through an ordinary HEVC
+    /// decoder (the hardware one when `hw` allows) of the stream
+    /// [`crate::mv_hevc::merged`] rewrites it into, without extradata;
+    /// `fps` the video's frame rate, `software_ok` whether the CPU decodes
+    /// both views in time (else the hardware decoder has to be there).
+    fn open_merged(
+        par: *const ff::AVCodecParameters,
+        time_base: ff::AVRational,
+        hw: HwDecode,
+        reversed: bool,
+        fps: f64,
+        software_ok: bool,
+    ) -> Result<Decoder> {
+        // SAFETY: par is valid for the call.
+        let rewriter = crate::mv_hevc::merged::configuration(unsafe { &*par }, fps)
+            .map_err(Error::Unsupported)?;
+        // SAFETY: copies the parameters into a fresh allocation, freed below
+        // (the decoders keep copies of their own).
+        let inner = unsafe {
+            let mut p = ff::avcodec_parameters_alloc();
+            if p.is_null() || ff::avcodec_parameters_copy(p, par) < 0 {
+                ff::avcodec_parameters_free(&mut p);
+                return Err(Error::Unsupported("codec parameters copy".into()));
+            }
+            ff::av_freep((&raw mut (*p).extradata).cast());
+            (*p).extradata_size = 0;
+            (*p).codec_tag = 0;
+            let inner = Self::open_with(p, time_base, hw, crate::v4l2::enabled());
+            ff::avcodec_parameters_free(&mut p);
+            inner?
+        };
+        if !software_ok && !inner.hardware {
+            return Err(Error::Unsupported(format!(
+                "no hardware decoder ({})",
+                inner.hardware_error.as_deref().unwrap_or("off")
+            )));
+        }
+        let merged = crate::mv_hevc::merged::MergedDecoder::new(
+            inner,
+            rewriter,
+            par,
+            time_base,
+            reversed,
+            hw,
+            software_ok,
+        )?;
+        let mut dec = Decoder {
+            ctx: std::ptr::null_mut(),
+            #[cfg(target_os = "linux")]
+            native: None,
+            replay: Default::default(),
+            replay_end: false,
+            name: String::new(),
+            hardware: false,
+            hardware_error: None,
+            hardware_holders: Default::default(),
+            time_base,
+            origin: 0.0,
+            nal: None,
+            skip: None,
+            paired: Some(Paired::MvHevcMerged(Box::new(merged))),
+            left_out: 0,
+        };
+        dec.follow_paired();
+        Ok(dec)
+    }
+
+    /// A decoder of multiview HEVC (see [`MvHevcMode`]).
+    pub(crate) fn open_mv_hevc(
+        par: *const ff::AVCodecParameters,
+        time_base: ff::AVRational,
+        mode: MvHevcMode,
+        reversed: bool,
+    ) -> Result<Decoder> {
+        let (inner, strip) = match mode {
+            // As tests open it: at the frame rate the parameters say, for a
+            // stream the CPU decodes in time.
+            MvHevcMode::Merged(hw) => {
+                // SAFETY: par is valid for the call.
+                let fps = Some(crate::q2d(unsafe { (*par).framerate }))
+                    .filter(|r| (1.0..=480.0).contains(r))
+                    .unwrap_or(30.0);
+                return Self::open_merged(par, time_base, hw, reversed, fps, true);
+            }
+            MvHevcMode::BaseAlone(hw) | MvHevcMode::BaseTwice(hw) => {
+                // SAFETY: copies the parameters into a fresh allocation,
+                // freed below (the decoders keep copies of their own), and
+                // gives it a base-layer record in a buffer of its own.
+                unsafe {
+                    let mut p = ff::avcodec_parameters_alloc();
+                    if p.is_null() || ff::avcodec_parameters_copy(p, par) < 0 {
+                        ff::avcodec_parameters_free(&mut p);
+                        return Err(Error::Unsupported("codec parameters copy".into()));
+                    }
+                    let record = std::slice::from_raw_parts(
+                        (*p).extradata,
+                        if (*p).extradata.is_null() {
+                            0
+                        } else {
+                            (*p).extradata_size.max(0) as usize
+                        },
+                    );
+                    let length_size = record.get(21).map(|&b| usize::from(b & 3) + 1);
+                    if let Some(base) = crate::mv_hevc::base_layer_record(record) {
+                        let buf =
+                            ff::av_mallocz(base.len() + ff::AV_INPUT_BUFFER_PADDING_SIZE as usize)
+                                .cast::<u8>();
+                        if !buf.is_null() {
+                            std::ptr::copy_nonoverlapping(base.as_ptr(), buf, base.len());
+                            ff::av_freep((&raw mut (*p).extradata).cast());
+                            (*p).extradata = buf;
+                            (*p).extradata_size = base.len() as i32;
+                        }
+                    }
+                    let inner = Self::open_with(p, time_base, hw, crate::v4l2::enabled());
+                    ff::avcodec_parameters_free(&mut p);
+                    (inner?, length_size)
+                }
+            }
+            MvHevcMode::Stills | MvHevcMode::BothViews => {
+                // SAFETY: lookup returns a static descriptor or null.
+                let codec = unsafe { ff::avcodec_find_decoder(ff::AV_CODEC_ID_HEVC) };
+                if codec.is_null() {
+                    return Err(Error::Unsupported("no HEVC decoder".into()));
+                }
+                let stills = mode == MvHevcMode::Stills;
+                let inner = Self::try_open(codec, par, time_base, false, stills, !stills)?;
+                (inner, None)
+            }
+        };
+        let mut dec = Decoder {
+            ctx: std::ptr::null_mut(),
+            #[cfg(target_os = "linux")]
+            native: None,
+            replay: Default::default(),
+            replay_end: false,
+            name: String::new(),
+            hardware: false,
+            hardware_error: None,
+            hardware_holders: Default::default(),
+            time_base,
+            origin: 0.0,
+            nal: None,
+            skip: None,
+            paired: Some(Paired::MvHevc(Box::new(
+                crate::mv_hevc::MvHevcDecoder::new(
+                    inner,
+                    match mode {
+                        MvHevcMode::BothViews | MvHevcMode::Merged(_) => {
+                            crate::mv_hevc::Views::Both
+                        }
+                        MvHevcMode::Stills | MvHevcMode::BaseTwice(_) => {
+                            crate::mv_hevc::Views::BaseTwice
+                        }
+                        MvHevcMode::BaseAlone(_) => crate::mv_hevc::Views::Base,
+                    },
+                    strip,
+                    reversed,
+                ),
+            ))),
+            left_out: 0,
+        };
+        dec.follow_paired();
+        Ok(dec)
+    }
+
     /// Takes the pairing decoder's inner decoder's name and hardware state
     /// (which change when the hardware decoder fails and software takes
     /// over).
@@ -509,6 +741,20 @@ impl Decoder {
             Some(Paired::Mvc(m)) if m.two_d.is_some() => (&m.inner, "3D Blu-ray as 2D"),
             Some(Paired::Mvc(m)) => (&m.inner, "3D Blu-ray"),
             Some(Paired::FrameSequential(f)) => (&f.inner, "frame sequential 3D"),
+            Some(Paired::MvHevc(m)) if m.views != crate::mv_hevc::Views::Both => {
+                (&m.inner, "MV-HEVC base view")
+            }
+            Some(Paired::MvHevc(m)) => (&m.inner, "MV-HEVC 3D"),
+            Some(Paired::MvHevcMerged(m)) => match &m.fallback {
+                Some(f) => {
+                    self.name = f.name.clone();
+                    self.hardware = f.hardware;
+                    self.hardware_error = m.gave_up.clone();
+                    self.hardware_holders = f.hardware_holders.clone();
+                    return;
+                }
+                None => (&m.inner, "MV-HEVC 3D"),
+            },
         };
         self.name = format!("{} ({what})", inner.name);
         self.hardware = inner.hardware;
@@ -539,7 +785,7 @@ impl Decoder {
                     if c.is_null() {
                         continue;
                     }
-                    Self::try_open(c, par, time_base, hardware, hw == HwDecode::Stills)
+                    Self::try_open(c, par, time_base, hardware, hw == HwDecode::Stills, false)
                 }
                 Candidate::Default => {
                     // SAFETY: as above.
@@ -547,7 +793,7 @@ impl Decoder {
                     if c.is_null() {
                         continue;
                     }
-                    Self::try_open(c, par, time_base, false, hw == HwDecode::Stills)
+                    Self::try_open(c, par, time_base, false, hw == HwDecode::Stills, false)
                 }
             };
             match r {
@@ -624,12 +870,15 @@ impl Decoder {
         Err(Error::Unsupported("V4L2 needs Linux".into()))
     }
 
+    /// Opens `codec`; `all_views` has an HEVC decoder give out every view of
+    /// a multiview stream, not just the base layer's.
     fn try_open(
         codec: *const ff::AVCodec,
         par: *const ff::AVCodecParameters,
         time_base: ff::AVRational,
         hardware: bool,
         stills: bool,
+        all_views: bool,
     ) -> Result<Decoder> {
         // SAFETY: standard decoder setup; ctx freed by Decoder::drop or here.
         unsafe {
@@ -685,6 +934,9 @@ impl Decoder {
                 let k = CString::new("num_capture_buffers").unwrap_or_default();
                 let v = CString::new("8").unwrap_or_default();
                 ff::av_dict_set(&mut opts, k.as_ptr(), v.as_ptr(), 0);
+            }
+            if all_views {
+                ff::av_dict_set(&mut opts, c"view_ids".as_ptr(), c"-1".as_ptr(), 0);
             }
             let video = (*par).codec_type == ff::AVMEDIA_TYPE_VIDEO;
             let r = if video && !hardware && !stills {
@@ -766,6 +1018,8 @@ impl Decoder {
         let sent = match self.paired.as_mut() {
             Some(Paired::Mvc(m)) => Some(m.send(pkt)),
             Some(Paired::FrameSequential(f)) => Some(f.inner.send(pkt)),
+            Some(Paired::MvHevc(m)) => Some(m.send(pkt)),
+            Some(Paired::MvHevcMerged(m)) => Some(m.send(pkt)),
             None => None,
         };
         if let Some(r) = sent {
@@ -831,6 +1085,8 @@ impl Decoder {
         let received = match self.paired.as_mut() {
             Some(Paired::Mvc(m)) => Some(m.receive(frame)),
             Some(Paired::FrameSequential(f)) => Some(f.receive(frame)),
+            Some(Paired::MvHevc(m)) => Some(m.receive(frame)),
+            Some(Paired::MvHevcMerged(m)) => Some(m.receive(frame)),
             None => None,
         };
         if let Some(r) = received {
@@ -919,7 +1175,33 @@ impl Decoder {
                 f.inner
                     .skip_before(target - frame_duration / 2.0, frame_duration);
             }
+            // Both views of a picture share its time, so they are kept or
+            // left out together.
+            Some(Paired::MvHevc(m)) => {
+                self.skip = None;
+                m.inner.skip_before(target + self.origin, frame_duration);
+            }
+            Some(Paired::MvHevcMerged(m)) => match m.fallback.as_mut() {
+                Some(f) => {
+                    self.skip = None;
+                    f.skip_before(target + self.origin, frame_duration);
+                }
+                None => {
+                    m.skip = self.skip.take();
+                    m.skip_seconds = Some((target + self.origin, frame_duration));
+                }
+            },
             None => {}
+        }
+    }
+
+    /// The decoder rewriting multiview HEVC for an HEVC decoder, when this is
+    /// one.
+    #[cfg(test)]
+    pub(crate) fn merged(&mut self) -> Option<&mut crate::mv_hevc::merged::MergedDecoder> {
+        match self.paired.as_mut() {
+            Some(Paired::MvHevcMerged(m)) => Some(m),
+            _ => None,
         }
     }
 
@@ -976,6 +1258,8 @@ impl Decoder {
         match self.paired.as_mut() {
             Some(Paired::Mvc(m)) => return m.flush(),
             Some(Paired::FrameSequential(f)) => return f.flush(),
+            Some(Paired::MvHevc(m)) => return m.flush(),
+            Some(Paired::MvHevcMerged(m)) => return m.flush(),
             None => {}
         }
         #[cfg(target_os = "linux")]

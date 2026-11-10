@@ -543,6 +543,25 @@ the format list corrects it. A file nothing labels can be set to
 **3D FS** (frame sequential) in the format list, and a mislabelled one to any other
 format.
 
+MV-HEVC videos (spatial video from an iPhone or Apple Vision Pro, and
+other cameras that record multiview HEVC) play as full 3D, each eye at its
+full size, found by their two views without any tag in the name. Both
+views decode on the Frame's hardware decoder, which knows only ordinary
+HEVC: FramePlayerX rewrites each picture's second view as it plays, so the
+decoder gives the very pictures of both. A video coded in a way the rewrite
+can't express decodes both views on the CPU instead (an iPhone's two 1080p
+eyes keep up); the stream info then says why. With hardware decoding
+switched off, a video too large for the CPU shows its base view in both
+eyes. One beyond what the hardware
+decoder takes, Apple Immersive Video among them, plays one eye as a 2D
+video on the hardware decoder; the decoder line in the video's info says
+"MV-HEVC base view". To watch one of those in 3D, convert it once on a PC
+to side-by-side HEVC, with FFmpeg 7.1 or newer:
+
+```bash
+ffmpeg -i spatial.mov -filter_complex "[0:v:vpos:left][0:v:vpos:right]hstack[v]" -map "[v]" -map 0:a? -c:v libx265 -crf 18 -tag:v hvc1 -c:a copy spatial_SBS.mp4
+```
+
 A disc image, 2D or 3D, plays its main title (its longest playlist) with
 its chapters (under **⚙ › Chapters**) and its audio and subtitle languages.
 Menus, extras and other titles aren't offered.
@@ -562,7 +581,7 @@ out. The same panel has position, size, IPD/depth, stereo alignment,
 picture controls, subtitle depth and keyframes (adjustments that change
 smoothly along the video).
 
-Codecs: H.264, HEVC (8/10-bit, HDR10/HLG tone-mapped), AV1, VP9, VP8,
+Codecs: H.264, HEVC (8/10-bit, HDR10/HLG tone-mapped, MV-HEVC 3D), AV1, VP9, VP8,
 VC-1, MPEG-4, MPEG-2, ProRes. Audio: AAC, AC-3/E-AC-3, Opus, Vorbis, FLAC,
 MP3, DTS, TrueHD, PCM (Blu-ray and DVD LPCM too), and spatial (ambisonic)
 audio that follows your head.
