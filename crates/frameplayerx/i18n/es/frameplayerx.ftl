@@ -1025,3 +1025,20 @@ plex-connection-subnet-desc = Plex puede considerar remota otra subred o VLAN, i
 plex-connection-manual-local-desc = Con un token de acceso, usa una IP de la red local en el modo Solo local.
 plex-test-required = Conecta con un servidor antes de guardar.
 plex-new-account-source = Volver a vincular la cuenta o cambiar el token añade una fuente separada y conserva esta.
+
+decoder-why-mv-hevc = este vídeo MV-HEVC está codificado de una forma que no se puede pasar al decodificador por hardware, así que ambos ojos se decodifican por software
+# Short.
+decoder-pill-mv-hevc = MV-HEVC por software
+decoder-notice-mv-hevc = Este vídeo 3D MV-HEVC (vídeo espacial) está codificado de una forma que no se puede pasar al decodificador por hardware, así que ambos ojos se decodifican por software, que no da abasto con este tamaño. Convertido en un PC a HEVC lado a lado, se reproduce por hardware
+
+source-kind-onedrive-desc = Tu OneDrive de Microsoft: inicia sesión con un código en tu teléfono u ordenador, sin escribir aquí ninguna contraseña
+# Short: the Microsoft account the source signs in to.
+onedrive-sign-in = Cuenta de Microsoft
+onedrive-sign-in-desc = Obtén un código, introdúcelo en tu teléfono u ordenador en la dirección indicada e inicia sesión en Microsoft.
+onedrive-waiting = En tu teléfono u ordenador, visita esta dirección, introduce el código e inicia sesión:
+onedrive-expired = Este código ha caducado. Obtén otro código e inténtalo de nuevo.
+onedrive-signed-in = Sesión iniciada como { $account }
+# Short: the ID of the Azure app registration the headset signs in as.
+onedrive-client-id = ID de aplicación (cliente)
+onedrive-client-id-desc = Esta versión no tiene una aplicación de OneDrive propia: introduce el ID de aplicación (cliente) de tu registro de aplicación de Azure. La guía de usuario explica cómo crear uno.
+onedrive-sign-in-required = Inicia sesión en tu cuenta de Microsoft antes de guardar.

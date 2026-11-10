@@ -1025,3 +1025,20 @@ plex-connection-subnet-desc = Plex peut considérer un autre sous-réseau ou VLA
 plex-connection-manual-local-desc = Pour un jeton d’accès, utilisez une adresse IP locale avec « Local uniquement ».
 plex-test-required = Connectez-vous à un serveur avant d’enregistrer.
 plex-new-account-source = Une nouvelle association ou un autre jeton ajoute une source séparée et conserve celle-ci.
+
+decoder-why-mv-hevc = cette vidéo MV-HEVC est encodée d’une façon que le décodeur matériel ne peut pas recevoir, donc les deux yeux sont décodés en logiciel
+# Short.
+decoder-pill-mv-hevc = MV-HEVC en logiciel
+decoder-notice-mv-hevc = Cette vidéo 3D MV-HEVC (vidéo spatiale) est encodée d’une façon que le décodeur matériel ne peut pas recevoir, donc les deux yeux sont décodés en logiciel, qui ne suit pas à cette taille. Convertie sur un PC en HEVC côte à côte, elle est lue par le décodeur matériel
+
+source-kind-onedrive-desc = Votre OneDrive Microsoft : connectez-vous avec un code sur votre téléphone ou votre ordinateur, sans saisir de mot de passe ici
+# Short: the Microsoft account the source signs in to.
+onedrive-sign-in = Compte Microsoft
+onedrive-sign-in-desc = Obtenez un code, puis saisissez-le sur votre téléphone ou votre ordinateur à l’adresse indiquée et connectez-vous à Microsoft.
+onedrive-waiting = Sur votre téléphone ou votre ordinateur, ouvrez cette adresse, saisissez le code et connectez-vous :
+onedrive-expired = Ce code a expiré. Obtenez un autre code et réessayez.
+onedrive-signed-in = Connecté en tant que { $account }
+# Short: the ID of the Azure app registration the headset signs in as.
+onedrive-client-id = ID d’application (client)
+onedrive-client-id-desc = Cette version n’a pas d’application OneDrive à elle : saisissez l’ID d’application (client) de votre inscription d’application Azure. Le guide d’utilisation explique comment en créer une.
+onedrive-sign-in-required = Connectez-vous à votre compte Microsoft avant d’enregistrer.

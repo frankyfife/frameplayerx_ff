@@ -967,3 +967,20 @@ plex-connection-subnet-desc = 即使使用局域网地址，Plex 也可能将其
 plex-connection-manual-local-desc = 使用访问令牌且选择“仅限本地”时，请填写局域网 IP 地址。
 plex-test-required = 请先连接服务器，再保存。
 plex-new-account-source = 重新关联账户或更换令牌会添加独立来源，并保留当前来源。
+
+decoder-why-mv-hevc = 此 MV-HEVC 视频的编码方式无法交给硬件解码器，所以双眼都用软件解码
+# Short.
+decoder-pill-mv-hevc = MV-HEVC 软件解码
+decoder-notice-mv-hevc = 此 MV-HEVC 3D 视频（空间视频）的编码方式无法交给硬件解码器，所以双眼都用软件解码，而这个尺寸软件解码跟不上。在电脑上转换为左右并排的 HEVC 后，即可用硬件解码播放
+
+source-kind-onedrive-desc = 你的 Microsoft OneDrive：在手机或电脑上用代码登录，无需在此输入密码
+# Short: the Microsoft account the source signs in to.
+onedrive-sign-in = Microsoft 账户
+onedrive-sign-in-desc = 获取代码，然后在手机或电脑上访问所示地址，输入代码并登录 Microsoft。
+onedrive-waiting = 请在手机或电脑上访问此地址，输入代码并登录：
+onedrive-expired = 此代码已过期。请获取新代码后重试。
+onedrive-signed-in = 已登录为 { $account }
+# Short: the ID of the Azure app registration the headset signs in as.
+onedrive-client-id = 应用程序（客户端）ID
+onedrive-client-id-desc = 此版本没有自带的 OneDrive 应用：请输入你的 Azure 应用注册的应用程序（客户端）ID。用户指南说明了如何创建。
+onedrive-sign-in-required = 请先登录 Microsoft 账户，再保存。

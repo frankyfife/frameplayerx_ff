@@ -58,8 +58,8 @@ pub use catalog::{
 };
 pub use config::{
     CardRef, Credentials, DlnaConfig, FeedConfig, HttpConfig, LibraryConfig, LocalConfig,
-    MediaBrowserConfig, OneDriveConfig, PlexConfig, SftpConfig, SmbConfig, SourceConfig, SourceKind,
-    default_config_path, load_configs, save_configs,
+    MediaBrowserConfig, OneDriveConfig, PlexConfig, SftpConfig, SmbConfig, SourceConfig,
+    SourceKind, default_config_path, load_configs, save_configs,
 };
 pub use dlna::{DlnaDevice, DlnaSource, SsdpResponse, discover};
 pub use error::{Error, Result};
@@ -71,8 +71,8 @@ pub use mediabrowser::{
     MbFacets, MbFilter, MbHome, MbItem, MbKind, MbPage, MbQuery, MbSort, MbVersion,
     MediaBrowserSource, QuickConnectState, quick_connect_initiate_url, quick_connect_poll_url,
 };
-pub use sftp::SftpSource;
 pub use onedrive::OneDriveSource;
+pub use sftp::SftpSource;
 pub use sidecar::{ScriptFile, Sidecars, SubtitleFile, match_sidecars};
 pub use smb::SmbSource;
 pub use transcode::TranscodeTarget;

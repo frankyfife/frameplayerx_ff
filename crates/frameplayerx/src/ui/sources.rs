@@ -538,7 +538,7 @@ fn pin_form(ui: &mut egui::Ui, v: &mut View) {
     }
 }
 
-fn kinds() -> [(SourceKind, &'static str); 10] {
+fn kinds() -> [(SourceKind, &'static str); 11] {
     [
         (SourceKind::Library, tr!("source-kind-library-desc")),
         (SourceKind::MediaBrowser, tr!("source-kind-jellyfin-desc")),

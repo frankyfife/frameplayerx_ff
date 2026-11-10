@@ -967,3 +967,20 @@ plex-connection-subnet-desc = LAN アドレスでも、別のサブネットや 
 plex-connection-manual-local-desc = アクセストークンで「ローカルのみ」を使う場合は、LAN の IP アドレスを指定してください。
 plex-test-required = 保存する前にサーバーに接続してください。
 plex-new-account-source = 再連携またはトークンの変更では、このソースを残して別のソースを追加します。
+
+decoder-why-mv-hevc = この MV-HEVC 映像はハードウェアデコーダーに渡せない形式でエンコードされているため、両目ともソフトウェアでデコードします
+# Short.
+decoder-pill-mv-hevc = MV-HEVC はソフトウェア
+decoder-notice-mv-hevc = この MV-HEVC 3D 映像（空間ビデオ）はハードウェアデコーダーに渡せない形式でエンコードされているため、両目ともソフトウェアでデコードしますが、このサイズでは間に合いません。パソコンでサイドバイサイドの HEVC に変換すると、ハードウェアで再生できます
+
+source-kind-onedrive-desc = Microsoft OneDrive：スマートフォンまたはパソコンでコードを入力してサインインします。ここでパスワードは入力しません
+# Short: the Microsoft account the source signs in to.
+onedrive-sign-in = Microsoft アカウント
+onedrive-sign-in-desc = コードを取得し、スマートフォンまたはパソコンで表示されたアドレスに入力して、Microsoft にサインインしてください。
+onedrive-waiting = スマートフォンまたはパソコンでこのアドレスを開き、コードを入力してサインインしてください：
+onedrive-expired = このコードは期限切れです。別のコードを取得して、もう一度お試しください。
+onedrive-signed-in = { $account } としてサインイン済み
+# Short: the ID of the Azure app registration the headset signs in as.
+onedrive-client-id = アプリケーション (クライアント) ID
+onedrive-client-id-desc = このビルドには専用の OneDrive アプリがありません。Azure のアプリ登録のアプリケーション (クライアント) ID を入力してください。作成方法はユーザーガイドにあります。
+onedrive-sign-in-required = 保存する前に Microsoft アカウントにサインインしてください。
