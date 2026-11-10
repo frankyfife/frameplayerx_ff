@@ -112,6 +112,9 @@ pub(crate) struct Rewriter {
     /// What the current coded video sequence's POCs are raised by: all of
     /// its pictures' above the IDR picture it starts with.
     offset: i32,
+    /// The base view's pictures there are to refer to (by their new POCs):
+    /// the last one and what it kept.
+    base_keep: Vec<i32>,
     /// The second view's pictures to keep (by their new POCs) through an
     /// access unit without one of its pictures.
     layer1_keep: Vec<i32>,
@@ -134,6 +137,7 @@ impl Rewriter {
             skip_rasl: false,
             prev_tid0: 0,
             offset: 0,
+            base_keep: Vec::new(),
             layer1_keep: Vec::new(),
             eyes: None,
         }
@@ -141,15 +145,28 @@ impl Rewriter {
 
     /// The views' IDs, base layer's first.
     pub(crate) fn view_ids(&self) -> [u32; 2] {
-        self.vps
-            .values()
-            .next()
-            .map_or([0, 1], |v| v.value.view_ids)
+        self.active_vps().map_or([0, 1], |v| v.value.view_ids)
+    }
+
+    /// The base view's bit depth (8 before its SPS came).
+    pub(crate) fn bit_depth(&self) -> u32 {
+        self.sps.values().find(|s| s.layer == 0).map_or(8, |s| {
+            let rep = &s.value.tools.rep;
+            rep.bit_depth_luma.max(rep.bit_depth_chroma)
+        })
     }
 
     /// The second layer's nuh_layer_id.
     fn layer1(&self) -> Option<u8> {
-        self.vps.values().find_map(|v| v.value.layer1)
+        self.active_vps().and_then(|v| v.value.layer1)
+    }
+
+    /// The VPS the base view's SPS names, else any there is.
+    fn active_vps(&self) -> Option<&Stored<Vps>> {
+        let base = self.sps.values().find(|s| s.layer == 0);
+        base.and_then(|s| s.rbsp.get(2))
+            .and_then(|b| self.vps.get(&u32::from(b >> 4)))
+            .or_else(|| self.vps.values().next())
     }
 
     /// Starts again at the next IRAP picture (after a seek, or damage).
@@ -280,7 +297,7 @@ impl Rewriter {
             // A CRA picture starting a sequence, or a BLA picture: the RASL
             // pictures after it can't decode.
             self.skip_rasl = bh.kind == 21 || bh.bla();
-        } else if !bh.rasl() {
+        } else if bh.irap() {
             self.skip_rasl = false;
         }
         if bh.rasl() && self.skip_rasl {
@@ -310,8 +327,15 @@ impl Rewriter {
         if let Some(l) = l1_sps {
             alike(&base_sps, l)?;
         }
+        // The second view's SPS of this access unit, else the one known: M
+        // is the same through a sequence, with or without its pictures.
         let log2 = l1_sps
-            .map_or(0, |l| l.log2_max_poc_lsb)
+            .map(|l| l.log2_max_poc_lsb)
+            .or_else(|| {
+                let l1 = self.sps.values().find(|s| s.layer > 0);
+                l1.map(|s| s.value.log2_max_poc_lsb)
+            })
+            .unwrap_or(0)
             .max(base_sps.log2_max_poc_lsb);
         let m = 1i32 << log2;
         if first_of_sequence {
@@ -319,18 +343,34 @@ impl Rewriter {
             // pictures (at least the IRAP picture's less M / 2), and below
             // 32768 for the IRAP picture (less than M).
             self.offset = 3 * m;
+            self.base_keep.clear();
             self.layer1_keep.clear();
         }
         let p = original + self.offset;
         let (e_poc, c_poc) = (p - m, p - 2 * m);
 
-        // The base view's references, and the second view's.
+        // The base view's references, and the second view's: of those a
+        // picture names, the ones there are. One it doesn't predict from
+        // that isn't there (left behind by a seek, or before the sequence)
+        // is left out, as is any of a picture of I slices, which name none
+        // in their headers.
+        let intra = |s: &[Segment]| s.iter().all(|s| s.slice.slice_type == 2);
+        let (base_intra, dep_intra) = (intra(&base), intra(&dep));
+        let there = |rps: &syntax::StRps, poc: i32, kept: &[i32], all_intra: bool| {
+            let keep = |e: &(i32, bool)| kept.contains(&(poc + e.0)) || (e.1 && !all_intra);
+            syntax::StRps {
+                before: rps.before.iter().copied().filter(keep).collect(),
+                after: rps.after.iter().copied().filter(keep).collect(),
+            }
+        };
         let base_rps = b.st_rps.clone().unwrap_or_default();
+        let base_rps = there(&base_rps, p, &self.base_keep, base_intra);
         let base_keep: Vec<i32> = base_rps
             .all()
             .map(|(d, _)| p + d)
             .chain(std::iter::once(p))
             .collect();
+        self.base_keep.clone_from(&base_keep);
         let d0 = dep.first().map(|d| &d.slice);
         if let Some(d) = d0
             && let Some(lsb) = d.poc_lsb
@@ -341,6 +381,14 @@ impl Rewriter {
             ));
         }
         let dep_rps = d0.and_then(|d| d.st_rps.clone()).unwrap_or_default();
+        let dep_rps = there(&dep_rps, e_poc, &self.layer1_keep, dep_intra);
+        if first_of_sequence && dep_rps.all().next().is_some() {
+            // The IDR picture the rewritten sequence starts with leaves
+            // none of the second view's pictures to predict from.
+            return Err(Bad::Unsupported(
+                "a second view predicted across the start of a sequence".into(),
+            ));
+        }
         let l1_refs: Vec<i32> = if d0.is_some() {
             dep_rps.all().map(|(d, _)| e_poc + d).collect()
         } else {
@@ -349,7 +397,7 @@ impl Rewriter {
         if d0.is_some() {
             self.layer1_keep = l1_refs.iter().copied().chain([e_poc]).collect();
         }
-        let copy = d0.is_some_and(|d| d.inter_layer) && dep.iter().any(|d| d.slice.slice_type != 2);
+        let copy = d0.is_some_and(|d| d.inter_layer) && !dep_intra;
 
         let mut out = Vec::new();
         let sps = base_sps;
@@ -367,7 +415,8 @@ impl Rewriter {
                 key: true,
             });
         }
-        // The base picture.
+        // The base picture: a trailing one that may be referred to, as its
+        // copy does.
         for nal in &prefix {
             annex_b(nal, &mut data);
         }
@@ -378,7 +427,7 @@ impl Rewriter {
             let mut w = Writer::new();
             w.extend(
                 &NalHeader {
-                    kind: trailing(s.header),
+                    kind: syntax::TRAIL_R,
                     layer: 0,
                     tid: s.header.tid,
                 }
@@ -395,10 +444,15 @@ impl Rewriter {
                 w.u(16, (p as u32) & 0xffff);
                 write_rps(&mut w, &rps);
                 w.ue(0);
-                if s.header.idr() && sps.temporal_mvp {
-                    w.flag(false);
+                // slice_temporal_mvp_enabled_flag, which a picture of I
+                // slices doesn't use: 1, as 0 would let the decoder forget
+                // the motion the other view's pictures still predict from.
+                let mut rest = s.slice.after_refs;
+                if sps.temporal_mvp && (s.header.idr() || base_intra) {
+                    w.flag(true);
+                    rest += usize::from(!s.header.idr());
                 }
-                w.copy(&s.rbsp, s.slice.after_refs, s.slice.extension.1);
+                w.copy(&s.rbsp, rest, s.slice.extension.1);
             }
             slice_out(w, s, &mut data);
         }
@@ -433,7 +487,11 @@ impl Rewriter {
             for s in &dep {
                 let mut w = Writer::new();
                 let h = NalHeader {
-                    kind: trailing(s.header),
+                    kind: if s.header.sub_layer_non_reference() {
+                        syntax::TRAIL_N
+                    } else {
+                        syntax::TRAIL_R
+                    },
                     layer: 0,
                     tid: s.header.tid,
                 };
@@ -447,9 +505,9 @@ impl Rewriter {
                         s,
                         &sps,
                         &rps,
-                        e_poc,
-                        copy.then_some(c_poc),
+                        (e_poc, copy.then_some(c_poc)),
                         &dep_rps,
+                        dep_intra,
                     )?;
                 }
                 w.copy(&s.rbsp, s.slice.entry.0, s.slice.entry.1);
@@ -492,7 +550,7 @@ impl Rewriter {
                 .get(&pps.sps_id)
                 .ok_or(Bad::Broken("slice before its SPS"))?
                 .value;
-            let vps = self.vps.values().next().map(|v| &v.value);
+            let vps = self.active_vps().map(|v| &v.value);
             let previous = out
                 .iter()
                 .rev()
@@ -548,7 +606,7 @@ impl Rewriter {
             w.ue(0);
         };
         // The VPS.
-        let vps = self.vps.values().next().ok_or(Bad::Broken("no VPS"))?;
+        let vps = self.active_vps().ok_or(Bad::Broken("no VPS"))?;
         let v = &vps.value;
         let mut w = Writer::new();
         w.extend(&[0x40, 0x01]);
@@ -556,7 +614,9 @@ impl Rewriter {
         w.u(2, 3);
         w.u(6, 0);
         w.u(3, v.max_sub_layers_minus1);
-        w.flag(v.temporal_id_nesting);
+        // Nesting only where it has to be on (one sub-layer): with it, a
+        // picture of a higher sub-layer could not be a trailing one.
+        w.flag(v.max_sub_layers_minus1 == 0);
         w.u(16, 0xffff);
         w.copy(&vps.rbsp, v.ptl.0, v.level_at);
         w.u(8, u32::from(level));
@@ -571,7 +631,10 @@ impl Rewriter {
         // The SPS.
         let stop = stop_bit(&base.rbsp).ok_or(Bad::Broken("SPS without a stop bit"))?;
         let mut w = Writer::new();
-        w.copy(&base.rbsp, 0, s.level_at);
+        // sps_temporal_id_nesting_flag as the VPS's.
+        w.copy(&base.rbsp, 0, 23);
+        w.flag(v.max_sub_layers_minus1 == 0);
+        w.copy(&base.rbsp, 24, s.level_at);
         w.u(8, u32::from(level));
         w.copy(&base.rbsp, s.level_at + 8, s.poc_bits.0);
         w.ue(16 - 4);
@@ -617,17 +680,6 @@ impl Rewriter {
         }
         out.extend(copy_pps(sps_id));
         Ok(())
-    }
-}
-
-/// The NAL unit type of a picture of the rewritten stream for a picture of
-/// this type: past the IDR picture starting it, every one a trailing one.
-fn trailing(h: NalHeader) -> u8 {
-    match h.kind {
-        16..=23 | 7 | 9 => syntax::TRAIL_R,
-        // RADL_N, RASL_N: TRAIL_N.
-        6 | 8 => 0,
-        k => k,
     }
 }
 
@@ -786,7 +838,9 @@ pub(crate) fn copy_picture(
         w.ue(0);
     }
     if shape.temporal_mvp {
-        w.flag(false);
+        // On: off, in a picture of TemporalId 0, would let the decoder forget
+        // the motion both views' pictures still predict from.
+        w.flag(true);
     }
     if shape.sao {
         w.flag(false);
@@ -796,7 +850,7 @@ pub(crate) fn copy_picture(
     }
     w.flag(true); // num_ref_idx_active_override_flag
     w.ue(0);
-    w.ue(4); // five_minus_max_num_merge_cand
+    w.ue(3); // five_minus_max_num_merge_cand: two, see copy_slice_data
     w.se(0);
     align(&mut w);
     w.extend(&copy_slice_data(
@@ -812,15 +866,18 @@ pub(crate) fn copy_picture(
 
 /// The header of an independent slice segment of the second view, from
 /// slice_reserved_flag to the end of the loop filter flags.
+/// `pocs`: the picture's, and its copy picture's when it has one. `own`:
+/// its own view's pictures it refers to; `intra`: all its slices are I.
 fn dependent_header(
     w: &mut Writer,
     s: &Segment,
     sps: &Sps,
     rps: &Rps,
-    e_poc: i32,
-    copy: Option<i32>,
+    pocs: (i32, Option<i32>),
     own: &syntax::StRps,
+    intra: bool,
 ) -> Result<(), Bad> {
+    let (e_poc, copy) = pocs;
     let sl = &s.slice;
     w.copy(&s.rbsp, sl.reserved.0, sl.reserved.1);
     w.ue(sl.slice_type);
@@ -839,7 +896,8 @@ fn dependent_header(
         None => w.ue(0),
     }
     if sps.temporal_mvp {
-        w.flag(sl.temporal_mvp);
+        // 1 for a picture of I slices: see the base view's.
+        w.flag(sl.temporal_mvp || intra);
     }
     w.copy(&s.rbsp, sl.sao.0, sl.sao.1);
     if sl.slice_type != 2 {

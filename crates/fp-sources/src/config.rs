@@ -786,6 +786,8 @@ mod tests {
         let j = serde_json::to_string(&sample()[4]).unwrap();
         assert!(j.contains("\"type\":\"mediabrowser\""), "{j}");
         let j = serde_json::to_string(&sample()[5]).unwrap();
+        assert!(j.contains("\"type\":\"sftp\""), "{j}");
+        let j = serde_json::to_string(&sample()[6]).unwrap();
         assert!(j.contains("\"type\":\"onedrive\""), "{j}");
         // Optional fields may be omitted.
         let c: SourceConfig =

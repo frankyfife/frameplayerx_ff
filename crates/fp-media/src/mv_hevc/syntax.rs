@@ -11,6 +11,9 @@ use crate::mvc::bits::Reader;
 
 pub(crate) const RASL_N: u8 = 8;
 pub(crate) const RASL_R: u8 = 9;
+/// Why a VPS whose layers aren't views can't be rewritten.
+pub(crate) const NOT_MULTIVIEW: &str = "a scalability other than multiview";
+pub(crate) const TRAIL_N: u8 = 0;
 pub(crate) const TRAIL_R: u8 = 1;
 pub(crate) const IDR_W_RADL: u8 = 19;
 pub(crate) const IDR_N_LP: u8 = 20;
@@ -101,6 +104,14 @@ impl StRps {
     }
 }
 
+/// A delta_poc_minus1 or abs_delta_rps_minus1, plus 1: at most 2^15.
+fn rps_delta(r: &mut Reader) -> Result<i32, Bad> {
+    match r.ue()? {
+        v if v < 32768 => Ok(v as i32 + 1),
+        _ => Err(Bad::Broken("RPS delta out of range")),
+    }
+}
+
 /// `st_ref_pic_set(idx)`, `sets` holding those of the SPS before it (all of
 /// them, for one in a slice header).
 fn st_rps(r: &mut Reader, idx: usize, sets: &[StRps], in_slice: bool) -> Result<StRps, Bad> {
@@ -112,7 +123,7 @@ fn st_rps(r: &mut Reader, idx: usize, sets: &[StRps], in_slice: bool) -> Result<
             .and_then(|i| sets.get(i))
             .ok_or(Bad::Broken("RPS predicted from a missing set"))?;
         let sign = r.flag()?;
-        let abs = r.ue()? as i32 + 1;
+        let abs = rps_delta(r)?;
         let delta_rps = if sign { -abs } else { abs };
         let (neg, pos) = (&reference.before, &reference.after);
         let n = neg.len() + pos.len();
@@ -155,6 +166,10 @@ fn st_rps(r: &mut Reader, idx: usize, sets: &[StRps], in_slice: bool) -> Result<
                 out.after.push((d, used[neg.len() + j]));
             }
         }
+        let all = out.before.iter().chain(&out.after);
+        if out.before.len() > 16 || out.after.len() > 16 || all.clone().any(|e| e.0.abs() > 32768) {
+            return Err(Bad::Broken("RPS out of range"));
+        }
         return Ok(out);
     }
     let negatives = r.ue()?;
@@ -165,12 +180,12 @@ fn st_rps(r: &mut Reader, idx: usize, sets: &[StRps], in_slice: bool) -> Result<
     let mut out = StRps::default();
     let mut poc = 0;
     for _ in 0..negatives {
-        poc -= r.ue()? as i32 + 1;
+        poc -= rps_delta(r)?;
         out.before.push((poc, r.flag()?));
     }
     poc = 0;
     for _ in 0..positives {
-        poc += r.ue()? as i32 + 1;
+        poc += rps_delta(r)?;
         out.after.push((poc, r.flag()?));
     }
     Ok(out)
@@ -235,7 +250,11 @@ fn hrd(r: &mut Reader, common: bool, max_sub_layers: u32) -> Result<(), Bad> {
         } else {
             low_delay = r.flag()?;
         }
-        let cpbs = if low_delay { 1 } else { r.ue()? + 1 };
+        let cpbs = if low_delay {
+            1
+        } else {
+            r.ue()?.saturating_add(1)
+        };
         if cpbs > 32 {
             return Err(Bad::Broken("too many CPBs"));
         }
@@ -275,7 +294,6 @@ pub(crate) struct Dpb {
 pub(crate) struct Vps {
     pub(crate) id: u32,
     pub(crate) max_sub_layers_minus1: u32,
-    pub(crate) temporal_id_nesting: bool,
     /// The general profile_tier_level, bits of the RBSP.
     pub(crate) ptl: (usize, usize),
     pub(crate) level_at: usize,
@@ -285,6 +303,10 @@ pub(crate) struct Vps {
     pub(crate) rep: Option<RepFormat>,
     pub(crate) layer1_dpb: Option<Dpb>,
     pub(crate) default_ref_layers_active: bool,
+    /// Which pictures of the second layer may refer to the base layer's:
+    /// those with a TemporalId below the base layer's sub-layers, and (but
+    /// for 0) below its max_tid_il_ref_pics_plus1.
+    pub(crate) inter_layer_tids: (u32, u32),
     /// The views' view_id_val, base layer's first.
     pub(crate) view_ids: [u32; 2],
 }
@@ -297,7 +319,7 @@ pub(crate) fn vps(rbsp: &[u8]) -> Result<Vps, Bad> {
     }
     let max_layers = r.u(6)? + 1;
     let max_sub_layers_minus1 = r.u(3)?;
-    let temporal_id_nesting = r.flag()?;
+    r.flag()?; // vps_temporal_id_nesting_flag
     r.u(16)?;
     let start = r.pos();
     let level_at = ptl(&mut r, true, max_sub_layers_minus1)?;
@@ -341,13 +363,13 @@ pub(crate) fn vps(rbsp: &[u8]) -> Result<Vps, Bad> {
     let mut out = Vps {
         id,
         max_sub_layers_minus1,
-        temporal_id_nesting,
         ptl: (start, ptl_end),
         level_at,
         layer1: None,
         rep: None,
         layer1_dpb: None,
         default_ref_layers_active: false,
+        inter_layer_tids: (max_sub_layers_minus1 + 1, 7),
         view_ids: [0, 1],
     };
     if max_layers > 1 && layer_sets > 1 && r.flag()? {
@@ -374,7 +396,7 @@ fn extension(
     let splitting = r.flag()?;
     for i in 0..16 {
         if r.flag()? != (i == 1) {
-            return unsupported("a scalability other than multiview");
+            return unsupported(NOT_MULTIVIEW);
         }
     }
     let dimension_id_len = if splitting { 0 } else { r.u(3)? + 1 };
@@ -401,11 +423,13 @@ fn extension(
             *m = r.u(3)? + 1;
         }
     }
-    if r.flag()? {
-        r.u(3)?;
-    }
+    // max_tid_il_ref_pics_plus1 of the base layer for the second.
+    vps.inter_layer_tids = (max_sub[0], if r.flag()? { r.u(3)? } else { 7 });
     vps.default_ref_layers_active = r.flag()?;
-    let ptls = r.ue()? + 1;
+    let ptls = r.ue()?.saturating_add(1);
+    if ptls > 64 {
+        return Err(Bad::Broken("too many profiles"));
+    }
     for _ in 2..ptls {
         let present = r.flag()?;
         ptl(r, present, vps.max_sub_layers_minus1)?;
@@ -452,7 +476,7 @@ fn extension(
     for j in 0..max_sub[0].max(max_sub[1]) {
         if j == 0 || !info || r.flag()? {
             for _ in 0..2 {
-                dpb.max_dec_pic_buffering = r.ue()? + 1;
+                dpb.max_dec_pic_buffering = r.ue()?.saturating_add(1);
             }
             dpb.num_reorder_pics = r.ue()?;
             r.ue()?;
@@ -586,11 +610,14 @@ pub(crate) fn sps(rbsp: &[u8], layer: u8, vps: Option<&Vps>) -> Result<Sps, Bad>
                 r.ue()?;
             }
         }
-        tools.rep.bit_depth_luma = r.ue()? + 8;
-        tools.rep.bit_depth_chroma = r.ue()? + 8;
+        tools.rep.bit_depth_luma = r.ue()?.saturating_add(8);
+        tools.rep.bit_depth_chroma = r.ue()?.saturating_add(8);
+    }
+    if tools.rep.bit_depth_luma > 16 || tools.rep.bit_depth_chroma > 16 {
+        return Err(Bad::Broken("bit depth"));
     }
     let poc_start = r.pos();
-    let log2_max_poc_lsb = r.ue()? + 4;
+    let log2_max_poc_lsb = r.ue()?.saturating_add(4);
     if log2_max_poc_lsb > 16 {
         return Err(Bad::Broken("POC LSB length"));
     }
@@ -601,10 +628,13 @@ pub(crate) fn sps(rbsp: &[u8], layer: u8, vps: Option<&Vps>) -> Result<Sps, Bad>
     if !multilayer {
         let present = r.flag()?;
         for _ in if present { 0 } else { max_sub_minus1 }..=max_sub_minus1 {
-            dpb.max_dec_pic_buffering = r.ue()? + 1;
+            dpb.max_dec_pic_buffering = r.ue()?.saturating_add(1);
             dpb.num_reorder_pics = r.ue()?;
             r.ue()?;
         }
+    }
+    if dpb.max_dec_pic_buffering > 16 || dpb.num_reorder_pics >= dpb.max_dec_pic_buffering.max(1) {
+        return Err(Bad::Broken("decoded picture buffer size"));
     }
     let ordering_end = r.pos();
     let mut coding = [0; 6];
@@ -612,10 +642,37 @@ pub(crate) fn sps(rbsp: &[u8], layer: u8, vps: Option<&Vps>) -> Result<Sps, Bad>
         *c = r.ue()?;
     }
     tools.coding = coding;
+    // Each within its range (7.4.3.2.1), so nothing below overflows.
+    if coding[0] > 3 || coding[1] > 3 || coding[2] > 3 || coding[3] > 3 {
+        return Err(Bad::Broken("block sizes"));
+    }
     let log2_min_cb = coding[0] + 3;
     let log2_ctb = log2_min_cb + coding[1];
     if !(4..=6).contains(&log2_ctb) {
         return Err(Bad::Broken("CTB size"));
+    }
+    let log2_min_tb = coding[2] + 2;
+    let log2_max_tb = log2_min_tb + coding[3];
+    let depths = log2_ctb.saturating_sub(log2_min_tb);
+    if log2_min_tb >= log2_min_cb
+        || log2_max_tb > log2_ctb.min(5)
+        || coding[4] > depths
+        || coding[5] > depths
+    {
+        return Err(Bad::Broken("transform block sizes"));
+    }
+    // A picture of whole smallest coding blocks, within level 6.2.
+    let (w, h) = (tools.rep.width, tools.rep.height);
+    let min_cb = 1 << log2_min_cb;
+    if w == 0
+        || h == 0
+        || w % min_cb != 0
+        || h % min_cb != 0
+        || w > 16888
+        || h > 16888
+        || u64::from(w) * u64::from(h) > 35_651_584
+    {
+        return Err(Bad::Broken("picture size"));
     }
     if r.flag()? {
         if multilayer && r.flag()? {
@@ -810,9 +867,12 @@ pub(crate) fn pps<'a>(rbsp: &[u8], sps: impl Fn(u32) -> Option<&'a Sps>) -> Resu
             range = Some((start, r.pos()));
         }
         if multilayer {
-            // Its scaling list inference and colour mapping change how the
-            // view decodes; the rest is for spatial scalability.
-            r.flag()?;
+            // POC resets renumber pictures in a way the rewrite doesn't
+            // follow; scaling list inference and colour mapping change how
+            // the view decodes; the rest is for spatial scalability.
+            if r.flag()? {
+                return unsupported("picture order count resets");
+            }
             if r.flag()? {
                 return unsupported("scaling lists from the other view");
             }
@@ -977,7 +1037,7 @@ pub(crate) fn slice(
                 if sps.lt_sps > 0 {
                     n = r.ue()?;
                 }
-                n += r.ue()?;
+                n = n.saturating_add(r.ue()?);
                 s.long_term_pictures = n;
                 if n > 0 {
                     return unsupported("long-term references");
@@ -990,7 +1050,10 @@ pub(crate) fn slice(
         }
         if nal.layer > 0 {
             let v = vps.ok_or(Bad::Broken("no VPS"))?;
-            s.inter_layer = v.default_ref_layers_active || r.flag()?;
+            let on = v.default_ref_layers_active || r.flag()?;
+            let tid = u32::from(nal.tid);
+            let (sub_layers, max_tid) = v.inter_layer_tids;
+            s.inter_layer = on && tid < sub_layers && (tid == 0 || max_tid > tid);
         }
         let sao = r.pos();
         if sps.sao {

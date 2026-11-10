@@ -11,3 +11,6 @@ The conformance streams `MVHEVCS_A.bit`, `MVHEVCS_B.bit` and
 https://fate-suite.ffmpeg.org/) aren't kept here; with them in a folder,
 `FPX_MV_HEVC_SAMPLES=<folder> cargo test -p fp-media --lib conformance_streams -- --ignored`
 checks that the rewrite for the hardware decoder gives their pictures exactly.
+`MVHEVCS_B.bit` predicts motion from the other view, which the rewrite
+can't express: there the check is that it gives up and goes on in software
+without losing or changing a picture.

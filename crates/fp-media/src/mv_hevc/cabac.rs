@@ -180,6 +180,7 @@ impl Picture {
 struct Contexts {
     split: [Context; 3],
     skip: [Context; 3],
+    merge_idx: Context,
 }
 
 /// coding_quadtree(): coding units as large as fit, each skipped.
@@ -220,17 +221,26 @@ fn quadtree(
     // cu_skip_flag: every neighbour is skipped too.
     let inc = usize::from(x0 > 0) + usize::from(y0 > 0);
     enc.decision(&mut ctx.skip[inc], true);
+    // merge_idx: see copy_slice_data.
+    enc.decision(&mut ctx.merge_idx, x0 == 0 && y0 == 0);
 }
 
 /// The slice data of a P slice, its picture's only one, that copies its
-/// first reference whole: every coding unit as large as it can be, skipped
-/// (merged, with one merge candidate: the zero motion vector), with SliceQpY
-/// 26 and cabac_init_flag 0. `width` and `height` in luma samples.
+/// first (and only) reference whole: every coding unit as large as it can
+/// be, skipped, merged with a zero motion vector, with SliceQpY 26 and
+/// cabac_init_flag 0. `width` and `height` in luma samples.
+///
+/// The slice has two merge candidates, so that it can leave temporal motion
+/// vector prediction on: the first coding unit has no neighbour to merge
+/// with, so its first candidate is the temporal one where the reference has
+/// motion there, and its second always the zero vector. Every other coding
+/// unit's first candidate is its left or upper neighbour's zero vector.
 pub(crate) fn copy_slice_data(width: u32, height: u32, log2_ctb: u32, log2_min_cb: u32) -> Vec<u8> {
     // initValues for initType 1.
     let mut ctx = Contexts {
         split: [107, 139, 126].map(|v| Context::new(v, 26)),
         skip: [197, 185, 201].map(|v| Context::new(v, 26)),
+        merge_idx: Context::new(122, 26),
     };
     let mut enc = Encoder::new();
     let min = 1u32 << log2_min_cb;

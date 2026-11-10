@@ -76,16 +76,25 @@ pub(crate) fn is_multiview(input: &Input, index: usize) -> bool {
     if par.codec_id != ff::AV_CODEC_ID_HEVC || par.codec_type != ff::AVMEDIA_TYPE_VIDEO {
         return false;
     }
-    if st.disposition & ff::AV_DISPOSITION_MULTILAYER as i32 != 0 {
-        return true;
-    }
-    let extradata = if par.extradata.is_null() {
-        &[][..]
-    } else {
-        // SAFETY: extradata holds extradata_size bytes.
-        unsafe { std::slice::from_raw_parts(par.extradata, par.extradata_size.max(0) as usize) }
-    };
-    hvcc_has_layers(extradata)
+    let extradata = crate::mvc::extradata(par);
+    let layered =
+        st.disposition & ff::AV_DISPOSITION_MULTILAYER as i32 != 0 || hvcc_has_layers(extradata);
+    layered && !other_scalability(extradata)
+}
+
+/// Whether a decoder configuration's VPS says its layers are something other
+/// than views (HEVC with an alpha layer, or scalable): a video to play as
+/// its base layer alone, like any HEVC.
+fn other_scalability(extradata: &[u8]) -> bool {
+    merged::configuration_units(extradata)
+        .into_iter()
+        .any(|nal| {
+            syntax::NalHeader::parse(nal).is_some_and(|h| h.kind == syntax::VPS)
+                && matches!(
+                    syntax::vps(&crate::mvc::bits::unescape(nal)),
+                    Err(crate::mvc::Bad::Unsupported(why)) if why == syntax::NOT_MULTIVIEW
+                )
+        })
 }
 
 /// Whether an `hvcC` decoder configuration record holds a NAL unit of a
@@ -156,6 +165,11 @@ pub(crate) fn plan(input: &Input, index: usize, hardware: bool) -> Plan {
     let eye = f64::from(par.width) * f64::from(par.height) * fps;
     if hardware && 3.0 * eye <= HARDWARE_BUDGET {
         match merged::configuration(par, fps) {
+            // The hardware decoder gives pictures of more than 8 bits packed
+            // (Q10C), which can't be put side by side.
+            Ok(r) if r.bit_depth() > 8 => {
+                log::info!("MV-HEVC in software: {} bits a sample", r.bit_depth());
+            }
             Ok(_) => return Plan::Hardware,
             Err(why) => log::info!("MV-HEVC in software: {why}"),
         }
@@ -775,6 +789,16 @@ mod tests {
         }
     }
 
+    /// A decoder opened to rewrite the stream did, to the end: it never
+    /// gave up and went on in software, which would give the very same
+    /// pictures.
+    fn assert_rewritten(dec: &mut Decoder, mode: crate::decode::MvHevcMode) {
+        if matches!(mode, crate::decode::MvHevcMode::Merged(_)) {
+            let gave_up = dec.merged().and_then(|m| m.gave_up.clone());
+            assert_eq!(gave_up, None, "the rewrite gave up");
+        }
+    }
+
     /// Every side-by-side picture of `name`, by `mode`.
     fn pictures(name: &str, mode: crate::decode::MvHevcMode) -> Pictures {
         let mut input = open(name);
@@ -792,7 +816,10 @@ mod tests {
                     out.push(rows(&frame));
                     continue;
                 }
-                Some(false) => return out,
+                Some(false) => {
+                    assert_rewritten(&mut dec, mode);
+                    return out;
+                }
                 None => {}
             }
             if input.read(pkt.as_ptr()).unwrap() {
@@ -912,6 +939,49 @@ mod tests {
         );
     }
 
+    /// Given up after the end of the stream was sent, the decoder playing
+    /// on is told of the end too: every picture once, then the end.
+    #[test]
+    fn a_rewrite_given_up_at_the_end_still_ends() {
+        let software = pictures(FIXTURE, crate::decode::MvHevcMode::BothViews);
+        let mut input = open(FIXTURE);
+        let vi = read_info(&input).video_stream().unwrap().index;
+        let st = input.streams()[vi];
+        // SAFETY: the stream belongs to the open input.
+        let (par, time_base) = unsafe { ((*st).codecpar, (*st).time_base) };
+        let mode = crate::decode::MvHevcMode::Merged(HwDecode::Off);
+        let mut dec = Decoder::open_mv_hevc(par, time_base, mode, false).unwrap();
+        let (mut pkt, mut frame) = (Packet::new(), Frame::new());
+        let mut got = Vec::new();
+        let mut send = |dec: &mut Decoder, p: *const ff::AVPacket, got: &mut Pictures| {
+            while !dec.send(p).unwrap() {
+                if dec.receive(&mut frame).unwrap() == Some(true) {
+                    got.push(rows(&frame));
+                }
+            }
+        };
+        while input.read(pkt.as_ptr()).unwrap() {
+            if pkt.stream_index() == vi {
+                send(&mut dec, pkt.as_ptr(), &mut got);
+            }
+            pkt.unref();
+        }
+        send(&mut dec, std::ptr::null(), &mut got);
+        dec.merged().unwrap().give_up_now();
+        let mut frame = Frame::new();
+        for _ in 0..1000 {
+            match dec.receive(&mut frame).unwrap() {
+                Some(true) => got.push(rows(&frame)),
+                Some(false) => {
+                    assert!(got == software, "{} pictures", got.len());
+                    return;
+                }
+                None => {}
+            }
+        }
+        panic!("the stream never ended");
+    }
+
     /// An Annex B stream's parameter sets (the first access unit's) and its
     /// access units.
     fn access_units(data: &[u8]) -> (Vec<u8>, Vec<Vec<u8>>) {
@@ -943,7 +1013,13 @@ mod tests {
     }
 
     /// The side-by-side pictures `mode` decodes from Annex B access units.
-    fn decode_units(sets: &[u8], units: &[Vec<u8>], mode: crate::decode::MvHevcMode) -> Pictures {
+    /// The pictures of `units` by `mode`, and why its rewrite gave up, if it
+    /// did.
+    fn decode_units(
+        sets: &[u8],
+        units: &[Vec<u8>],
+        mode: crate::decode::MvHevcMode,
+    ) -> (Pictures, Option<String>) {
         // SAFETY: fresh parameters of our own, given a copy of the sets.
         let mut par = unsafe {
             let p = ff::avcodec_parameters_alloc();
@@ -983,24 +1059,36 @@ mod tests {
         }
         dec.send(std::ptr::null()).unwrap();
         while !take(&mut dec, &mut out) {}
+        let gave_up = dec.merged().and_then(|m| m.gave_up.clone());
         // SAFETY: ours.
         unsafe { ff::avcodec_parameters_free(&mut par) };
-        out
+        (out, gave_up)
     }
 
     /// The MV-HEVC conformance streams FFmpeg's tests decode (from its FATE
     /// suite, `hevc-conformance/`), in the folder `FPX_MV_HEVC_SAMPLES`
-    /// names, rewritten exactly.
+    /// names, rewritten exactly. MVHEVCS_B predicts motion from the other
+    /// view, which the rewrite can't express: it gives up there, and the
+    /// pictures are the same through that too.
     #[test]
     #[ignore = "needs the conformance streams"]
     fn conformance_streams_rewrite_exactly() {
         use crate::decode::MvHevcMode;
         let dir = std::env::var("FPX_MV_HEVC_SAMPLES").unwrap();
-        for name in ["MVHEVCS_A.bit", "MVHEVCS_B.bit", "mv_nuh_layer_id.bit"] {
+        let streams = [
+            ("MVHEVCS_A.bit", None),
+            (
+                "MVHEVCS_B.bit",
+                Some("motion predicted from the other view"),
+            ),
+            ("mv_nuh_layer_id.bit", None),
+        ];
+        for (name, gives_up) in streams {
             let data = std::fs::read(format!("{dir}/{name}")).unwrap();
             let (sets, units) = access_units(&data);
-            let software = decode_units(&sets, &units, MvHevcMode::BothViews);
-            let merged = decode_units(&sets, &units, MvHevcMode::Merged(HwDecode::Off));
+            let (software, _) = decode_units(&sets, &units, MvHevcMode::BothViews);
+            let (merged, gave_up) = decode_units(&sets, &units, MvHevcMode::Merged(HwDecode::Off));
+            assert_eq!(gave_up.as_deref(), gives_up, "{name}");
             // Their times are the decoding order's, which FFmpeg's guess
             // replaces for some: only the pictures are compared.
             assert_eq!(merged.len(), software.len(), "{name}");

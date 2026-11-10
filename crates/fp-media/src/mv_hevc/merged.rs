@@ -11,6 +11,8 @@ use crate::mvc::{Bad, side_by_side};
 use crate::{Error, Result, check};
 use fp_ffmpeg_sys as ff;
 use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 /// What a picture of the rewritten stream is, by the tag it decodes under.
 #[derive(Clone, Copy, Debug)]
@@ -28,9 +30,19 @@ const WAITING: usize = 8;
 /// Packets since the last keyframe kept to replay in software.
 const HISTORY: usize = 600;
 
+/// Access units in a row the rewriter can't read before the stream goes on
+/// without it.
+const BROKEN: u32 = 3;
+
 pub(crate) struct MergedDecoder {
-    /// An HEVC decoder of the rewritten stream (Annex B, no extradata).
-    pub(crate) inner: Decoder,
+    /// An HEVC decoder of the rewritten stream (Annex B, no extradata),
+    /// until the rewrite gives up: closed then, so its hardware session is
+    /// free for the decoder playing on.
+    inner: Option<Decoder>,
+    /// `inner`'s name as it was opened: under another, it has fallen back
+    /// to another decoder, which starts without the stream's parameter
+    /// sets.
+    inner_name: String,
     rewriter: Rewriter,
     length_size: usize,
     /// The stream's parameters, to open the software decoder with.
@@ -41,6 +53,8 @@ pub(crate) struct MergedDecoder {
     /// Whether the CPU decodes both views in time: else, without the
     /// hardware decoder, the base view plays in both eyes.
     software_ok: bool,
+    /// Cuts the decoders' waits short (see [`Decoder::set_interrupt`]).
+    interrupt: Option<Arc<AtomicBool>>,
     /// Why the rewrite gave up, and the decoder playing on.
     pub(crate) gave_up: Option<String>,
     pub(crate) fallback: Option<Decoder>,
@@ -55,8 +69,14 @@ pub(crate) struct MergedDecoder {
     /// After giving up without the packets since the last keyframe, the
     /// decoder playing on takes none before the next.
     await_key: bool,
-    /// History the software decoder hasn't taken yet.
+    /// History the decoder playing on hasn't taken yet.
     replay: VecDeque<Packet>,
+    /// The end of the stream was sent; and, after giving up, is still to
+    /// send on (once `replay` is).
+    ended: bool,
+    end_owed: bool,
+    /// Access units in a row the rewriter couldn't read.
+    broken: u32,
     queue: VecDeque<Packet>,
     tags: HashMap<i64, Tag>,
     next_tag: i64,
@@ -104,12 +124,16 @@ pub(crate) fn configuration(
 
 /// The NAL units of a decoder configuration: an `hvcC` record's, or Annex
 /// B's.
-fn configuration_units(extradata: &[u8]) -> Vec<&[u8]> {
+pub(super) fn configuration_units(extradata: &[u8]) -> Vec<&[u8]> {
     if extradata.first() == Some(&1) {
         super::record_units(extradata)
     } else {
         crate::nal::units(extradata, 0).collect()
     }
+}
+
+fn lost() -> Error {
+    Error::Unsupported("no decoder left for this MV-HEVC video".into())
 }
 
 impl MergedDecoder {
@@ -141,7 +165,8 @@ impl MergedDecoder {
             _ => 0,
         };
         Ok(MergedDecoder {
-            inner,
+            inner_name: inner.name().to_string(),
+            inner: Some(inner),
             rewriter,
             length_size,
             par: copy,
@@ -149,6 +174,7 @@ impl MergedDecoder {
             reversed,
             hw,
             software_ok,
+            interrupt: None,
             gave_up: None,
             fallback: None,
             shown: None,
@@ -157,6 +183,9 @@ impl MergedDecoder {
             history_whole: true,
             await_key: false,
             replay: VecDeque::new(),
+            ended: false,
+            end_owed: false,
+            broken: 0,
             queue: VecDeque::new(),
             tags: HashMap::new(),
             next_tag: 0,
@@ -167,6 +196,21 @@ impl MergedDecoder {
             skip: None,
             skip_seconds: None,
         })
+    }
+
+    /// The decoder at work: of the rewritten stream, or the one playing on
+    /// after it gave up.
+    pub(crate) fn decoder(&self) -> Option<&Decoder> {
+        self.fallback.as_ref().or(self.inner.as_ref())
+    }
+
+    /// As [`Decoder::set_interrupt`], for the decoder at work and any after
+    /// it.
+    pub(crate) fn set_interrupt(&mut self, flag: Arc<AtomicBool>) {
+        if let Some(d) = self.fallback.as_mut().or(self.inner.as_mut()) {
+            d.set_interrupt(flag.clone());
+        }
+        self.interrupt = Some(flag);
     }
 
     /// Whether the base view is the left eye's: as the stream's SEI says,
@@ -186,14 +230,30 @@ impl MergedDecoder {
         self.give_up("asked to".into()).unwrap();
     }
 
+    /// Hands the decoder playing on the history it hasn't taken, then the
+    /// end of the stream if that was sent before; false when it is full.
+    fn feed_fallback(&mut self) -> Result<bool> {
+        let f = self.fallback.as_mut().ok_or_else(lost)?;
+        while let Some(p) = self.replay.front() {
+            if !f.send(p.as_ptr())? {
+                return Ok(false);
+            }
+            self.replay.pop_front();
+        }
+        if self.end_owed {
+            if !f.send(std::ptr::null())? {
+                return Ok(false);
+            }
+            self.end_owed = false;
+        }
+        Ok(true)
+    }
+
     /// Sends a packet (null: the end), as [`Decoder::send`].
     pub(crate) fn send(&mut self, pkt: *const ff::AVPacket) -> Result<bool> {
-        if let Some(f) = self.fallback.as_mut() {
-            while let Some(p) = self.replay.front() {
-                if !f.send(p.as_ptr())? {
-                    return Ok(false);
-                }
-                self.replay.pop_front();
+        if self.fallback.is_some() {
+            if !self.feed_fallback()? {
+                return Ok(false);
             }
             if self.await_key && !pkt.is_null() {
                 // SAFETY: a valid packet.
@@ -202,13 +262,16 @@ impl MergedDecoder {
                 }
                 self.await_key = false;
             }
-            return f.send(pkt);
+            return self.fallback.as_mut().ok_or_else(lost)?.send(pkt);
         }
         if !self.send_queued()? {
             return Ok(false);
         }
         if pkt.is_null() {
-            return self.inner.send(pkt);
+            let sent = self.inner.as_mut().ok_or_else(lost)?.send(pkt)?;
+            self.ended |= sent;
+            self.inner_changed()?;
+            return Ok(sent);
         }
         // SAFETY: a valid packet holding `size` bytes at `data`.
         let (data, pts, duration, key) = unsafe {
@@ -262,6 +325,11 @@ impl MergedDecoder {
                 }
             }
             Err(Bad::Broken(why)) => {
+                self.broken += 1;
+                if self.broken >= BROKEN {
+                    log::warn!("MV-HEVC: {why}, again; decoding on without the rewrite");
+                    return self.give_up(why.into());
+                }
                 log::debug!("MV-HEVC: {why}; starting again at the next keyframe");
                 self.rewriter.restart();
             }
@@ -271,7 +339,7 @@ impl MergedDecoder {
             }
         }
         self.send_queued()?;
-        self.hardware_lost()?;
+        self.inner_changed()?;
         Ok(true)
     }
 
@@ -281,7 +349,8 @@ impl MergedDecoder {
     fn give_up(&mut self, why: String) -> Result<bool> {
         self.gave_up = Some(why);
         self.shown = self.last_out;
-        self.inner.flush();
+        // Closed first: its hardware session is the next decoder's to have.
+        self.inner = None;
         self.queue.clear();
         self.tags.clear();
         self.bases.clear();
@@ -292,6 +361,9 @@ impl MergedDecoder {
             MvHevcMode::BaseTwice(self.hw)
         };
         let mut f = Decoder::open_mv_hevc(self.par, self.time_base, mode, self.reversed)?;
+        if let Some(flag) = &self.interrupt {
+            f.set_interrupt(flag.clone());
+        }
         if self.skip.is_some()
             && let Some((target, frame_duration)) = self.skip_seconds
         {
@@ -299,15 +371,21 @@ impl MergedDecoder {
         }
         self.replay = std::mem::take(&mut self.history).into();
         self.await_key = !self.history_whole;
+        self.end_owed = self.ended;
         self.fallback = Some(f);
         Ok(true)
     }
 
-    /// Gives up when the hardware decoder failed and the CPU can't decode
-    /// the rewritten stream in time.
-    fn hardware_lost(&mut self) -> Result<()> {
-        if self.fallback.is_none() && !self.software_ok && !self.inner.hardware {
-            log::warn!("MV-HEVC: the hardware decoder failed; the base view in both eyes");
+    /// Gives up when the decoder of the rewritten stream fell back to
+    /// another (the hardware decoder failed): that one starts in the middle
+    /// of a stream whose parameter sets came at its start.
+    fn inner_changed(&mut self) -> Result<()> {
+        if self
+            .inner
+            .as_ref()
+            .is_some_and(|i| i.name() != self.inner_name)
+        {
+            log::warn!("MV-HEVC: the hardware decoder failed; decoding on without the rewrite");
             self.give_up("the hardware decoder failed".into())?;
         }
         Ok(())
@@ -344,8 +422,9 @@ impl MergedDecoder {
 
     /// Hands queued pictures to the decoder; false when it is full.
     fn send_queued(&mut self) -> Result<bool> {
+        let inner = self.inner.as_mut().ok_or_else(lost)?;
         while let Some(p) = self.queue.front() {
-            if !self.inner.send(p.as_ptr())? {
+            if !inner.send(p.as_ptr())? {
                 return Ok(false);
             }
             self.queue.pop_front();
@@ -355,14 +434,10 @@ impl MergedDecoder {
 
     /// Receives a side-by-side frame, as [`Decoder::receive`].
     pub(crate) fn receive(&mut self, frame: &mut Frame) -> Result<Option<bool>> {
-        if let Some(f) = self.fallback.as_mut() {
+        if self.fallback.is_some() {
             loop {
-                while let Some(p) = self.replay.front() {
-                    if !f.send(p.as_ptr())? {
-                        break;
-                    }
-                    self.replay.pop_front();
-                }
+                self.feed_fallback()?;
+                let f = self.fallback.as_mut().ok_or_else(lost)?;
                 let r = f.receive(frame)?;
                 if r != Some(true) {
                     return Ok(r);
@@ -379,8 +454,12 @@ impl MergedDecoder {
                 return Ok(Some(true));
             }
             self.send_queued()?;
-            let r = self.inner.receive(&mut self.scratch)?;
-            self.hardware_lost()?;
+            let r = self
+                .inner
+                .as_mut()
+                .ok_or_else(lost)?
+                .receive(&mut self.scratch)?;
+            self.inner_changed()?;
             if self.fallback.is_some() {
                 return self.receive(frame);
             }
@@ -440,6 +519,7 @@ impl MergedDecoder {
     /// Puts `left` and `right` side by side into `out`, timed as `tag`;
     /// false when a precise seek leaves the pair out.
     fn pair(&mut self, out: &mut Frame, left: &Frame, right: &Frame, tag: Tag) -> Result<bool> {
+        self.broken = 0;
         if let Some(s) = self.skip {
             if s.drops(tag.pts, tag.duration) {
                 return Ok(false);
@@ -461,15 +541,21 @@ impl MergedDecoder {
 
     pub(crate) fn flush(&mut self) {
         self.skip = None;
+        self.ended = false;
+        self.end_owed = false;
         if let Some(f) = self.fallback.as_mut() {
             self.shown = None;
             self.replay.clear();
             return f.flush();
         }
-        self.inner.flush();
+        if let Some(inner) = self.inner.as_mut() {
+            inner.flush();
+        }
         self.rewriter.restart();
+        self.broken = 0;
         self.last_out = None;
         self.history.clear();
+        self.history_whole = false;
         self.queue.clear();
         self.tags.clear();
         self.bases.clear();

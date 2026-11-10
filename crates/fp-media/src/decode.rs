@@ -342,12 +342,13 @@ enum Paired {
 }
 
 impl Paired {
-    fn inner(&mut self) -> &mut Decoder {
+    /// As [`Decoder::set_interrupt`], for the decoder inside.
+    fn set_interrupt(&mut self, flag: Arc<AtomicBool>) {
         match self {
-            Paired::Mvc(m) => &mut m.inner,
-            Paired::FrameSequential(f) => &mut f.inner,
-            Paired::MvHevc(m) => &mut m.inner,
-            Paired::MvHevcMerged(m) => &mut m.inner,
+            Paired::Mvc(m) => m.inner.set_interrupt(flag),
+            Paired::FrameSequential(f) => f.inner.set_interrupt(flag),
+            Paired::MvHevc(m) => m.inner.set_interrupt(flag),
+            Paired::MvHevcMerged(m) => m.set_interrupt(flag),
         }
     }
 }
@@ -660,16 +661,9 @@ impl Decoder {
                         ff::avcodec_parameters_free(&mut p);
                         return Err(Error::Unsupported("codec parameters copy".into()));
                     }
-                    let record = std::slice::from_raw_parts(
-                        (*p).extradata,
-                        if (*p).extradata.is_null() {
-                            0
-                        } else {
-                            (*p).extradata_size.max(0) as usize
-                        },
-                    );
+                    let record = crate::mvc::extradata(&*p).to_vec();
                     let length_size = record.get(21).map(|&b| usize::from(b & 3) + 1);
-                    if let Some(base) = crate::mv_hevc::base_layer_record(record) {
+                    if let Some(base) = crate::mv_hevc::base_layer_record(&record) {
                         let buf =
                             ff::av_mallocz(base.len() + ff::AV_INPUT_BUFFER_PADDING_SIZE as usize)
                                 .cast::<u8>();
@@ -745,15 +739,16 @@ impl Decoder {
                 (&m.inner, "MV-HEVC base view")
             }
             Some(Paired::MvHevc(m)) => (&m.inner, "MV-HEVC 3D"),
-            Some(Paired::MvHevcMerged(m)) => match &m.fallback {
-                Some(f) => {
+            Some(Paired::MvHevcMerged(m)) => match (&m.fallback, m.decoder()) {
+                (Some(f), _) => {
                     self.name = f.name.clone();
                     self.hardware = f.hardware;
                     self.hardware_error = m.gave_up.clone();
                     self.hardware_holders = f.hardware_holders.clone();
                     return;
                 }
-                None => (&m.inner, "MV-HEVC 3D"),
+                (None, Some(inner)) => (inner, "MV-HEVC 3D"),
+                (None, None) => return,
             },
         };
         self.name = format!("{} ({what})", inner.name);
@@ -1223,14 +1218,24 @@ impl Decoder {
             nal.disposable(std::slice::from_raw_parts(p.data, p.size.max(0) as usize))
         }
     }
+    /// The decoder's name: another once it has fallen back to another
+    /// decoder.
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
 
     /// Lets the native hardware decoder lend its buffers as shared frames
     /// while [`shared_frames`] is on: the player's video decoder only, whose
     /// frames go to the renderer alone. Nothing for 3D pairing, which works
-    /// on copies.
+    /// on copies; a base view played alone is no pair.
     pub(crate) fn share_frames(&mut self) {
-        if self.paired.is_some() {
-            return;
+        match self.paired.as_mut() {
+            // A base view played alone goes through as it is decoded.
+            Some(Paired::MvHevc(m)) if m.views == crate::mv_hevc::Views::Base => {
+                return m.inner.share_frames();
+            }
+            Some(_) => return,
+            None => {}
         }
         #[cfg(target_os = "linux")]
         if let Some(n) = self.native.as_mut() {
@@ -1242,7 +1247,7 @@ impl Decoder {
     /// device short (the player sets it when closing).
     pub(crate) fn set_interrupt(&mut self, flag: Arc<AtomicBool>) {
         if let Some(p) = self.paired.as_mut() {
-            p.inner().set_interrupt(flag);
+            p.set_interrupt(flag);
             return;
         }
         #[cfg(target_os = "linux")]
