@@ -16,7 +16,7 @@ body = """
 - {{ commit.message | split(pat="\n") | first | trim }}\
   {% if commit.scope %} *({{ commit.scope }})*{% endif %}\
   {% if commit.breaking %} **BREAKING**{% endif %} \
-  ([`{{ commit.id | truncate(length=7, end="") }}`](https://github.com/remotesojourner/frameplayerx/commit/{{ commit.id }}))\
+  ([`{{ commit.id | truncate(length=7, end="") }}`](https://github.com/frankyfife/frameplayerx_ff/commit/{{ commit.id }}))\
 {% endfor %}
 {% endfor %}
 """

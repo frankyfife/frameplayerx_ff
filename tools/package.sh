@@ -18,7 +18,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 root="$PWD"
 version="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"]=="frameplayerx"))')"
-url_base="https://github.com/remotesojourner/frameplayerx/releases/download/v$version"
+url_base="https://github.com/frankyfife/frameplayerx_ff/releases/download/v$version"
 notes=""
 key=""
 while [ $# -gt 0 ]; do

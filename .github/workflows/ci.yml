@@ -270,7 +270,10 @@ jobs:
           path: out/
 
   release:
-    if: needs.version.outputs.is_release == 'true'
+    # This fork's releases are built and signed on its maintainer's PC (the
+    # key stays there); set the repository variable RELEASE_IN_CI to true,
+    # with the FP_RELEASE_KEY secret, to release from here instead.
+    if: needs.version.outputs.is_release == 'true' && vars.RELEASE_IN_CI == 'true'
     needs: [version, check, installer]
     runs-on: ubuntu-24.04
     # One at a time, so two runs can't publish the same version.

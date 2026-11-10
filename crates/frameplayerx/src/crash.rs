@@ -9,9 +9,9 @@ use std::collections::HashMap;
 
 /// The relay that files reports as issues in a private GitHub repository
 /// (tools/crash-relay; DEVELOPMENT.md sets it up). Without one, nobody is
-/// asked.
-pub const REPORT_URL: Option<&str> =
-    Some("https://frameplayerx-crash-relay.uneasylout.workers.dev/report");
+/// asked: this fork has none, and its crashes are not the original
+/// project's to sort out.
+pub const REPORT_URL: Option<&str> = None;
 
 /// How much of the log a report carries: its start (versions, devices,
 /// decoders) and its end, where the crash is.

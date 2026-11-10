@@ -10,3 +10,8 @@ recipient's option. FramePlayerX uses it under the Apache License 2.0.
 
 Bundled third-party libraries, fonts and pictures keep their own licences;
 see packaging/licenses/THIRD-PARTY.txt (licenses/ in the release).
+
+This fork (https://github.com/frankyfife/frameplayerx_ff) is a modified
+version of FramePlayerX: it adds MV-HEVC 3D decoding and a OneDrive
+source, and releases under its own signing key. Modifications
+Copyright 2026 frankyfife, under the Apache License 2.0.

@@ -22,4 +22,4 @@ Videos in ~/Videos, ~/Downloads and on microSD cards / USB drives are found
 automatically. Haptic scripts (.funscript) next to a video or in
 ~/.local/share/frameplayerx/Interactive are picked up too.
 
-User guide: https://github.com/remotesojourner/frameplayerx/blob/main/docs/USER-GUIDE.md
+User guide: https://github.com/frankyfife/frameplayerx_ff/blob/main/docs/USER-GUIDE.md

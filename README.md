@@ -4,10 +4,12 @@
 
 # FramePlayerX
 
-[![CI](https://github.com/remotesojourner/frameplayerx/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/remotesojourner/frameplayerx/actions/workflows/ci.yml)
-[![Latest Release](https://img.shields.io/github/v/release/remotesojourner/frameplayerx?sort=semver&style=flat&logo=github&label=release)](https://github.com/remotesojourner/frameplayerx/releases/latest)
-[![Latest Beta](https://img.shields.io/github/v/release/remotesojourner/frameplayerx?include_prereleases&sort=date&style=flat&logo=github&label=beta&color=orange)](https://github.com/remotesojourner/frameplayerx/releases)
+[![CI](https://github.com/frankyfife/frameplayerx_ff/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/frankyfife/frameplayerx_ff/actions/workflows/ci.yml)
+[![Latest Release](https://img.shields.io/github/v/release/frankyfife/frameplayerx_ff?sort=semver&style=flat&logo=github&label=release)](https://github.com/frankyfife/frameplayerx_ff/releases/latest)
+[![Latest Beta](https://img.shields.io/github/v/release/frankyfife/frameplayerx_ff?include_prereleases&sort=date&style=flat&logo=github&label=beta&color=orange)](https://github.com/frankyfife/frameplayerx_ff/releases)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue?style=flat)](LICENSE)
+
+> **This is a fork** of [remotesojourner/frameplayerx](https://github.com/remotesojourner/frameplayerx). It adds MV-HEVC 3D (spatial video from an iPhone or Apple Vision Pro), both eyes on the hardware decoder, and OneDrive as a source. Its releases, in-app updates and install links are this repository's own; the original's are not affected.
 
 A VR video player for the Valve Steam Frame. It plays flat, 180°, 360° and fisheye videos, in 2D or 3D, from the headset, a microSD card, a USB drive or a media server. It runs natively on the headset.
 
@@ -31,7 +33,7 @@ A VR video player for the Valve Steam Frame. It plays flat, 180°, 360° and fis
 - **Custom controls**: choose what each controller button does
 - **Languages**: English, German, Spanish, French, Japanese and Simplified Chinese, following the language Steam is set to; the phone remote follows the headset
 - **Updates**: checks for a new version when it starts, and installs it from Settings when you choose to, on a Stable or a Beta channel
-- **No FramePlayerX account or tracking**: it connects to the servers you add and to GitHub to check for updates. Linking Plex also contacts Plex's account services to sign in, discover servers and renew access; a OneDrive source contacts Microsoft's sign-in service and Microsoft Graph. After a crash it asks whether to send a crash report, shows what's in it (no video names, folders or server addresses) and sends nothing unless you choose to
+- **No FramePlayerX account or tracking**: it connects to the servers you add and to GitHub to check for updates. Linking Plex also contacts Plex's account services to sign in, discover servers and renew access; a OneDrive source contacts Microsoft's sign-in service and Microsoft Graph. This fork sends no crash reports
 
 ---
 
@@ -48,9 +50,8 @@ A VR video player for the Valve Steam Frame. It plays flat, 180°, 360° and fis
 ## Quick Start
 
 <p align="center">
-  <a href="https://github.com/remotesojourner/frameplayerx/releases/latest/download/Install-FramePlayerX.desktop"><img src="assets/install-button.svg" alt="Install in Desktop Mode" width="240" /></a>
-  <!-- <a href="https://framedropvr.com/install?manifest=https%3A%2F%2Fgithub.com%2Fremotesojourner%2Fframeplayerx%2Freleases%2Flatest%2Fdownload%2Fframedrop.json"><img src="assets/framedrop-button.svg" alt="Install with FrameDrop" width="240" /></a> -->
-  <a href="https://remotesojourner.github.io/frameplayerx/frame-control.html"><img src="assets/frame-control-button.svg" alt="Install with Frame Control" width="240" /></a>
+  <a href="https://github.com/frankyfife/frameplayerx_ff/releases/latest/download/Install-FramePlayerX.desktop"><img src="assets/install-button.svg" alt="Install in Desktop Mode" width="240" /></a>
+  <!-- <a href="https://framedropvr.com/install?manifest=https%3A%2F%2Fgithub.com%2Ffrankyfife%2Fframeplayerx_ff%2Freleases%2Flatest%2Fdownload%2Fframedrop.json"><img src="assets/framedrop-button.svg" alt="Install with FrameDrop" width="240" /></a> -->
 </p>
 
 1. **Install FramePlayerX** with one of the buttons above, or from a terminal:
@@ -58,10 +59,10 @@ A VR video player for the Valve Steam Frame. It plays flat, 180°, 360° and fis
    - **Desktop Mode, on the headset**: open this page in the headset's browser and press **Desktop Mode** to download the installer. Open `Install-FramePlayerX.desktop` from your Downloads folder and confirm when Desktop Mode asks whether to trust it. A terminal window opens, installs the latest release and adds FramePlayerX to your Steam library. It may ask to close Steam for a moment; the app then shows up in Gaming Mode.
 
    <!-- - **FrameDrop or Frame Control, from a PC**: turn on Developer Mode (Steam Settings › System › Developer Mode) and pair the headset once with [FrameDrop](https://framedropvr.com) or [Frame Control](https://github.com/saphid/steam-frame). Then press its button in your PC's browser and it installs the latest release on the headset. -->
-   - **Frame Control from a PC**: turn on Developer Mode (Steam Settings › System › Developer Mode) and pair the headset once with [Frame Control](https://github.com/saphid/steam-frame). Then press its button in your PC's browser and it installs the latest release on the headset.
+   - **Frame Control from a PC**: turn on Developer Mode (Steam Settings › System › Developer Mode) and pair the headset once with [Frame Control](https://github.com/saphid/steam-frame). Then paste the `frame-control://` link from the [user guide](docs/USER-GUIDE.md#install) into your PC's browser and it installs the latest release on the headset.
      > **Note:** [FrameDrop](https://framedropvr.com) currently has a bug where it has trouble downloading from GitHub, so it isn't supported yet, but should be once the bug is fixed.
 
-   - **`frameplayerx-install`, from a PC's terminal**: turn on Developer Mode, download `frameplayerx-install` for your PC from the [release page](https://github.com/remotesojourner/frameplayerx/releases/latest), then:
+   - **`frameplayerx-install`, from a PC's terminal**: turn on Developer Mode, download `frameplayerx-install` for your PC from the [release page](https://github.com/frankyfife/frameplayerx_ff/releases/latest), then:
 
      ```bash
      frameplayerx-install pair 192.168.0.68    # once, with the headset's IP address

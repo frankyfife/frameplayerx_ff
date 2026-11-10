@@ -56,7 +56,7 @@ import urllib.request
 import zipfile
 import zlib
 
-REPO = 'remotesojourner/frameplayerx'
+REPO = 'frankyfife/frameplayerx_ff'
 DEVTOOLS = 'http://127.0.0.1:8080/json'
 HOME = os.path.expanduser('~')
 STEAM_ROOTS = [os.path.join(HOME, '.local/share/Steam'), os.path.join(HOME, '.steam/steam')]

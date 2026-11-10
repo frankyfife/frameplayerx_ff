@@ -1048,8 +1048,8 @@ fn about_text(text: &str) -> &str {
 }
 
 /// The project's pages, as About lists them.
-const GITHUB: &str = "github.com/remotesojourner/frameplayerx";
-const ISSUES: &str = "github.com/remotesojourner/frameplayerx/issues/new/choose";
+const GITHUB: &str = "github.com/frankyfife/frameplayerx_ff";
+const ISSUES: &str = "github.com/frankyfife/frameplayerx_ff/issues/new/choose";
 const SPONSOR: &str = "github.com/sponsors/remotesojourner";
 
 fn about(ui: &mut egui::Ui, v: &mut View) {

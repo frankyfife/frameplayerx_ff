@@ -3,5 +3,5 @@ Type=Application
 Name=Uninstall FramePlayerX
 Comment=Removes FramePlayerX from this Steam Frame and from the Steam library
 Icon=edit-delete
-Exec=konsole --hold -e sh -c "curl -fsSL https://github.com/remotesojourner/frameplayerx/releases/latest/download/frameplayerx-desktop-install.py -o /tmp/frameplayerx-desktop-install.py && python3 /tmp/frameplayerx-desktop-install.py --remove"
+Exec=konsole --hold -e sh -c "curl -fsSL https://github.com/frankyfife/frameplayerx_ff/releases/latest/download/frameplayerx-desktop-install.py -o /tmp/frameplayerx-desktop-install.py && python3 /tmp/frameplayerx-desktop-install.py --remove"
 Terminal=false
