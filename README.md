@@ -21,6 +21,7 @@ A VR video player for the Valve Steam Frame. It plays flat, 180°, 360° and fis
 - **VR and flat videos**: plays 180°, 360°, fisheye and flat videos, in 2D or 3D. The format is detected automatically, and you can change it for any video
 - **Hardware decoding**: HEVC (H.265) in 8 and 10 bits and H.264, both up to 8K, play on the Frame's own video decoder. Anything else, AV1 and VP9 included, plays with software decoding
 - **3D Blu-ray**: disc images (`.iso`), MKV rips and the disc's `.ssif` files play in full 3D (H.264 MVC) on the hardware decoder
+- **MV-HEVC 3D**: spatial video from an iPhone or Apple Vision Pro, and other multiview HEVC, plays in full 3D, both eyes on the hardware decoder (the second view rewritten into ordinary HEVC as it plays), else in software; one too large for either plays one eye in 2D on the hardware decoder
 - **Frame sequential 3D**: files whose eyes take turns frame by frame play in full 3D at the film's own frame rate
 - **Picture adjustments**: position, zoom, depth, picture settings and fisheye lens calibration, saved for each video, and a screen that follows your head for watching lying down
 - **Videos on the headset**: browse any folder on the headset, a microSD card or a USB drive, including cards formatted on Windows or a Mac, and make libraries of your folders, with thumbnails, filters and sorting

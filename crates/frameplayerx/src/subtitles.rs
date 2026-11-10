@@ -342,12 +342,12 @@ pub struct StereoSubs {
 }
 
 impl StereoSubs {
-    /// How a 3D video's picture subtitles are drawn. A 3D Blu-ray's or frame
-    /// sequential video's are made for one eye's picture, not the two side by
-    /// side it's decoded into, so they're drawn like a 2D video's, for both
-    /// eyes.
+    /// How a 3D video's picture subtitles are drawn. A 3D Blu-ray's, an
+    /// MV-HEVC or a frame sequential video's are made for one eye's picture,
+    /// not the two side by side it's decoded into, so they're drawn like a 2D
+    /// video's, for both eyes.
     pub fn of(video: &StreamInfo, format: &VideoFormat, swap_eyes: bool) -> Option<StereoSubs> {
-        let paired = video.mvc || video.frame_sequential;
+        let paired = video.mvc || video.mv_hevc || video.frame_sequential;
         (format.stereo.is_stereo() && !paired).then_some(StereoSubs {
             layout: format.stereo,
             canvas: (video.width, video.height),
@@ -428,6 +428,7 @@ mod tests {
             rotation: 0,
             pixel_aspect: 1.0,
             mvc: false,
+            mv_hevc: false,
             frame_sequential: false,
             sample_rate: 0,
             channels: 0,

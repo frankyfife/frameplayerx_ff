@@ -1191,6 +1191,7 @@ pub(crate) fn software_reason(
         Some(e) => e.strip_prefix("unsupported: ").unwrap_or(e).to_string(),
         None if !has_hardware_decoder(v) => tr!("decoder-why-none", stream = stream_desc(v)),
         None if !hardware_on => tr!("decoder-why-off").to_string(),
+        None if v.mv_hevc => tr!("decoder-why-mv-hevc").to_string(),
         None => tr!("decoder-why-untried").to_string(),
     }
 }
@@ -1242,6 +1243,11 @@ pub(crate) fn slow_decode_notice(
             tr!("decoder-pill-off"),
             tr!("decoder-notice-off", stream = desc),
         );
+    }
+    // Multiview HEVC whose coding the rewrite for the hardware decoder can't
+    // express decodes in software whatever the hardware decoder's state.
+    if v.mv_hevc && hardware_error.is_none() {
+        return Notice::new(tr!("decoder-pill-mv-hevc"), tr!("decoder-notice-mv-hevc"));
     }
     let size = format!("{}x{}", v.width, v.height);
     if hardware_error.is_some_and(|e| e.contains("too big")) {
@@ -1802,6 +1808,7 @@ mod tests {
             rotation: 0,
             pixel_aspect: 1.0,
             mvc: false,
+            mv_hevc: false,
             frame_sequential: false,
             sample_rate: 0,
             channels: 0,
@@ -1815,6 +1822,23 @@ mod tests {
         );
         let n = slow_decode_notice(&stream("av1", 8), true, None, &nobody).detail;
         assert!(n.contains("for AV1,"), "{n}");
+        // Multiview HEVC the rewrite can't take is in software, not for a
+        // busy decoder.
+        let spatial = StreamInfo {
+            mv_hevc: true,
+            ..stream("hevc", 8)
+        };
+        let n = slow_decode_notice(&spatial, true, None, &nobody);
+        assert!(
+            n.detail.contains("MV-HEVC") && !n.label.contains("busy"),
+            "{n:?}"
+        );
+        assert!(software_reason(&spatial, true, None).contains("MV-HEVC"));
+        // With hardware decoding off, turning it on is the way.
+        assert_eq!(
+            slow_decode_notice(&spatial, false, None, &nobody).label,
+            tr!("decoder-pill-off").to_string()
+        );
         let busy = "hardware decoder busy: other video sessions leave room for 8192x4064, \
                     not 8192x4096 10-bit";
         let n = slow_decode_notice(&stream("hevc", 8), true, Some(busy), &nobody).detail;

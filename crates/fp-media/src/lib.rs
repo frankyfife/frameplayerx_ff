@@ -26,6 +26,7 @@ pub(crate) mod frame_seq;
 pub mod info;
 pub(crate) mod input;
 pub(crate) mod io;
+pub(crate) mod mv_hevc;
 pub(crate) mod mvc;
 pub(crate) mod nal;
 pub mod player;

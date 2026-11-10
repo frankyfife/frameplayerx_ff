@@ -58,6 +58,10 @@ pub struct StreamInfo {
     /// 3D Blu-ray video (H.264 MVC): both eyes decode side by side, so
     /// `width` is twice an eye's.
     pub mvc: bool,
+    /// Multiview HEVC (spatial video): both views decode side by side, so
+    /// `width` is twice an eye's. A stream too large for that plays its base
+    /// view in 2D and isn't marked.
+    pub mv_hevc: bool,
     /// Frame sequential 3D: each pair of frames decodes side by side, so
     /// `width` is twice an eye's and `fps` the film's, half the file's.
     pub frame_sequential: bool,
@@ -321,6 +325,7 @@ pub fn read_info(input: &Input) -> MediaInfo {
             rotation: 0,
             pixel_aspect: 1.0,
             mvc: false,
+            mv_hevc: false,
             frame_sequential: false,
             sample_rate: 0,
             channels: 0,
@@ -352,11 +357,24 @@ pub fn read_info(input: &Input) -> MediaInfo {
                     hints.projection = spherical(par);
                 }
                 s.mvc = crate::mvc::stream_config(input, index).is_some();
+                let multiview = !s.mvc && crate::mv_hevc::is_multiview(input, index);
+                let base_alone = multiview
+                    && crate::mv_hevc::plan(input, index, crate::v4l2::enabled())
+                        == crate::mv_hevc::Plan::BaseAlone;
+                s.mv_hevc = multiview && !base_alone;
                 if s.mvc {
                     s.width *= 2;
                     hints.stereo = Some(StereoLayout::SideBySide);
                     hints.eyes_swapped =
                         dict_get(st.metadata, "stereo_mode").as_deref() == Some("block_rl");
+                } else if s.mv_hevc {
+                    // The decoder puts each eye on its side already.
+                    s.width *= 2;
+                    hints.stereo = Some(StereoLayout::SideBySide);
+                    hints.eyes_swapped = false;
+                } else if base_alone {
+                    hints.stereo = Some(StereoLayout::Mono);
+                    hints.eyes_swapped = false;
                 } else {
                     if crate::frame_seq::stream(input, index).is_some() {
                         s.frame_sequential = true;
