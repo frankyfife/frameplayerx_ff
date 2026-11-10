@@ -23,7 +23,7 @@ A VR video player for the Valve Steam Frame. It plays flat, 180°, 360° and fis
 - **Passthrough videos**: see your room around the people in passthrough videos, and behind green or blue screens
 - **Subtitles and spatial audio**: subtitles from a file or inside the video, picked in your language and shown in any script, and 360° audio that follows your head
 - **Videos on the headset**: browse any folder on the headset, a microSD card or a USB drive, including cards formatted on Windows or a Mac, and make libraries of your folders, with thumbnails, filters and sorting
-- **Media servers**: browse and play from Jellyfin, Emby, Plex, any server with a DeoVR feed or HereSphere API, network shares (SMB), SFTP servers, WebDAV, DLNA servers and web folders. Jellyfin, Emby and Plex can transcode while you watch, as can DeoVR feeds and HereSphere APIs that offer it; watch state syncs with Jellyfin, Emby, Plex and HereSphere
+- **Media servers**: browse and play from Jellyfin, Emby, Plex, any server with a DeoVR feed or HereSphere API, network shares (SMB), SFTP servers, OneDrive, WebDAV, DLNA servers and web folders (iCloud Drive and other clouds through `rclone serve webdav`). Jellyfin, Emby and Plex can transcode while you watch, as can DeoVR feeds and HereSphere APIs that offer it; watch state syncs with Jellyfin, Emby, Plex and HereSphere
 - **Watch history, Up next and playlists**: carry on where you left off, queue what plays next, shuffle the queue, autoplay it, loop a video or the whole queue, keep playlists of videos from any source, and mark favorites and ratings
 - **PIN locks**: hide a source behind a PIN until you unlock it
 - **Haptic devices**: optional, off until turned on; syncs supported haptic devices with videos that have scripts
@@ -31,7 +31,7 @@ A VR video player for the Valve Steam Frame. It plays flat, 180°, 360° and fis
 - **Custom controls**: choose what each controller button does
 - **Languages**: English, German, Spanish, French, Japanese and Simplified Chinese, following the language Steam is set to; the phone remote follows the headset
 - **Updates**: checks for a new version when it starts, and installs it from Settings when you choose to, on a Stable or a Beta channel
-- **No FramePlayerX account or tracking**: it connects to the servers you add and to GitHub to check for updates. Linking Plex also contacts Plex's account services to sign in, discover servers and renew access. After a crash it asks whether to send a crash report, shows what's in it (no video names, folders or server addresses) and sends nothing unless you choose to
+- **No FramePlayerX account or tracking**: it connects to the servers you add and to GitHub to check for updates. Linking Plex also contacts Plex's account services to sign in, discover servers and renew access; a OneDrive source contacts Microsoft's sign-in service and Microsoft Graph. After a crash it asks whether to send a crash report, shows what's in it (no video names, folders or server addresses) and sends nothing unless you choose to
 
 ---
 
@@ -41,7 +41,7 @@ A VR video player for the Valve Steam Frame. It plays flat, 180°, 360° and fis
 |---|---|
 | Valve Steam Frame | Developer Mode only to install with Frame Control<!-- , FrameDrop --> or a PC |
 | A PC (Windows, macOS or Linux) | Optional: only to install from a PC |
-| Media server | Optional: Jellyfin, Emby or Plex, a DeoVR feed or HereSphere API, a NAS share, an SFTP server, WebDAV or DLNA |
+| Media server | Optional: Jellyfin, Emby or Plex, a DeoVR feed or HereSphere API, a NAS share, an SFTP server, OneDrive, WebDAV or DLNA |
 
 ---
 
@@ -159,7 +159,7 @@ Usually because it's AV1 or 4:2:2, which the Frame's hardware decoder can't play
 
 ### Does it work with my media server or NAS?
 
-Yes, if it offers one of these: Jellyfin (sign in with Quick Connect or a password), Emby (a password), Plex (sign in with a linking code or an access token), a DeoVR feed or HereSphere API, SMB, SFTP, WebDAV or DLNA. Add it under Sources › Add source.
+Yes, if it offers one of these: Jellyfin (sign in with Quick Connect or a password), Emby (a password), Plex (sign in with a linking code or an access token), a DeoVR feed or HereSphere API, SMB, SFTP, OneDrive (sign in with a code), WebDAV or DLNA. Add it under Sources › Add source.
 
 ---
 

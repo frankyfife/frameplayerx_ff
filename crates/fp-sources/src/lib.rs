@@ -18,6 +18,7 @@
 //! | SFTP | [`sftp`] | `source:` locations relative to its folder |
 //! | Jellyfin / Emby | [`mediabrowser`] | `mb:<url>#<kind>=<id>` |
 //! | Plex | [`plex`] | `plex://source/<source>/<machine>/<kind>/<id>` |
+//! | OneDrive | [`onedrive`] | `source://source/<source>/onedrive/<item id>` |
 //!
 //! Sources are built from a serializable [`SourceConfig`] with [`build`];
 //! [`save_configs`] / [`load_configs`] persist them (credentials included)
@@ -35,6 +36,7 @@ mod json;
 pub mod local;
 pub mod location;
 pub mod mediabrowser;
+pub mod onedrive;
 pub mod plex;
 pub mod sftp;
 pub mod sidecar;
@@ -56,7 +58,7 @@ pub use catalog::{
 };
 pub use config::{
     CardRef, Credentials, DlnaConfig, FeedConfig, HttpConfig, LibraryConfig, LocalConfig,
-    MediaBrowserConfig, PlexConfig, SftpConfig, SmbConfig, SourceConfig, SourceKind,
+    MediaBrowserConfig, OneDriveConfig, PlexConfig, SftpConfig, SmbConfig, SourceConfig, SourceKind,
     default_config_path, load_configs, save_configs,
 };
 pub use dlna::{DlnaDevice, DlnaSource, SsdpResponse, discover};
@@ -70,6 +72,7 @@ pub use mediabrowser::{
     MediaBrowserSource, QuickConnectState, quick_connect_initiate_url, quick_connect_poll_url,
 };
 pub use sftp::SftpSource;
+pub use onedrive::OneDriveSource;
 pub use sidecar::{ScriptFile, Sidecars, SubtitleFile, match_sidecars};
 pub use smb::SmbSource;
 pub use transcode::TranscodeTarget;
@@ -270,6 +273,7 @@ pub fn build(config: &SourceConfig) -> Result<Box<dyn Source>> {
         SourceConfig::Sftp(c) => Box::new(SftpSource::new(c)?),
         SourceConfig::MediaBrowser(c) => Box::new(MediaBrowserSource::new(c)?),
         SourceConfig::Plex(c) => Box::new(plex::PlexSource::new(c)?),
+        SourceConfig::OneDrive(c) => Box::new(OneDriveSource::new(c)?),
     })
 }
 

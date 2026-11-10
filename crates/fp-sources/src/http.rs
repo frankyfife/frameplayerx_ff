@@ -22,8 +22,9 @@ use fp_core::ByteSource;
 use fp_core::sync::lock;
 use std::io::{self, Read};
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use ureq::http;
 use ureq::unversioned::resolver::{DefaultResolver, ResolvedSocketAddrs, Resolver};
 use ureq::unversioned::transport::{
@@ -1238,6 +1239,73 @@ pub struct HttpFile {
     src: CachedSource<HttpFetcher>,
 }
 
+/// What the first request for a file learned.
+enum Probe {
+    /// Ranges work: the size and the first block.
+    Ranged(Option<u64>, Vec<u8>),
+    /// The server sent the whole file: its length and the body, unread.
+    Plain(Option<u64>, Response),
+}
+
+/// Asks for the first block of `url` (`Range: bytes=0-<block>`), to learn
+/// its size and whether ranges work.
+fn probe(client: &HttpClient, url: &str) -> Result<Probe> {
+    let bs = client.opts.cache.block_size.max(4096) as u64;
+    let range = format!("bytes=0-{}", bs - 1);
+    let display = redact(url);
+    client.retrying(url, || {
+        let resp = client.send_once("GET", url, &[("Range", range.as_str())], None, true)?;
+        let status = resp.status().as_u16();
+        let cr = resp
+            .headers()
+            .get("content-range")
+            .and_then(|v| v.to_str().ok())
+            .and_then(parse_content_range);
+        match status {
+            206 => {
+                let total = cr.and_then(|c| c.total);
+                let want = total.map_or(bs, |t| t.min(bs));
+                let data = read_body(resp.into_body().into_reader(), want).map_err(|e| {
+                    Failure::Retry(
+                        Error::Http {
+                            url: display.clone(),
+                            message: e.to_string(),
+                        },
+                        None,
+                    )
+                })?;
+                Ok(Probe::Ranged(total, data))
+            }
+            416 => {
+                let total = cr.and_then(|c| c.total).unwrap_or(0);
+                let _ = read_body(resp.into_body().into_reader(), 64 << 10);
+                Ok(Probe::Ranged(Some(total), Vec::new()))
+            }
+            200 => {
+                let len = resp
+                    .headers()
+                    .get("content-length")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.trim().parse().ok());
+                Ok(Probe::Plain(len, resp))
+            }
+            s if is_transient_status(s) => Err(Failure::Retry(
+                Error::HttpStatus {
+                    status: s,
+                    url: display.clone(),
+                },
+                retry_after(&resp),
+            )),
+            s => Err(Failure::Fatal(status_error(s, url).unwrap_or(
+                Error::HttpStatus {
+                    status: s,
+                    url: display.clone(),
+                },
+            ))),
+        }
+    })
+}
+
 impl HttpFile {
     /// Opens `url` with one probe request (`Range: bytes=0-<block>`) that
     /// learns the size, whether ranges work, and fills the first block.
@@ -1245,64 +1313,13 @@ impl HttpFile {
         // Embedded `user:pass@` stays in the URL: `send_once` strips it into
         // an Authorization header on every request.
         let url = url.to_string();
+        let probe = probe(client, &url)?;
+        HttpFile::from_probe(client, url, probe)
+    }
+
+    fn from_probe(client: &HttpClient, url: String, probe: Probe) -> Result<HttpFile> {
         let bs = client.opts.cache.block_size.max(4096) as u64;
-        let range = format!("bytes=0-{}", bs - 1);
         let display = redact(&url);
-        enum Probe {
-            Ranged(Option<u64>, Vec<u8>),
-            Plain(Option<u64>, Response),
-        }
-        let probe = client.retrying(&url, || {
-            let resp = client.send_once("GET", &url, &[("Range", range.as_str())], None, true)?;
-            let status = resp.status().as_u16();
-            let cr = resp
-                .headers()
-                .get("content-range")
-                .and_then(|v| v.to_str().ok())
-                .and_then(parse_content_range);
-            match status {
-                206 => {
-                    let total = cr.and_then(|c| c.total);
-                    let want = total.map_or(bs, |t| t.min(bs));
-                    let data = read_body(resp.into_body().into_reader(), want).map_err(|e| {
-                        Failure::Retry(
-                            Error::Http {
-                                url: display.clone(),
-                                message: e.to_string(),
-                            },
-                            None,
-                        )
-                    })?;
-                    Ok(Probe::Ranged(total, data))
-                }
-                416 => {
-                    let total = cr.and_then(|c| c.total).unwrap_or(0);
-                    let _ = read_body(resp.into_body().into_reader(), 64 << 10);
-                    Ok(Probe::Ranged(Some(total), Vec::new()))
-                }
-                200 => {
-                    let len = resp
-                        .headers()
-                        .get("content-length")
-                        .and_then(|v| v.to_str().ok())
-                        .and_then(|v| v.trim().parse().ok());
-                    Ok(Probe::Plain(len, resp))
-                }
-                s if is_transient_status(s) => Err(Failure::Retry(
-                    Error::HttpStatus {
-                        status: s,
-                        url: display.clone(),
-                    },
-                    retry_after(&resp),
-                )),
-                s => Err(Failure::Fatal(status_error(s, &url).unwrap_or(
-                    Error::HttpStatus {
-                        status: s,
-                        url: display.clone(),
-                    },
-                ))),
-            }
-        })?;
         let opts = client.opts.cache.clone();
         let file = match probe {
             Probe::Ranged(size, first) => {
@@ -1383,7 +1400,7 @@ impl ByteSource for HttpFile {
         true
     }
 
-    fn net(&self) -> Option<std::sync::Arc<fp_core::NetCounters>> {
+    fn net(&self) -> Option<Arc<fp_core::NetCounters>> {
         self.src.net()
     }
 
@@ -1407,6 +1424,166 @@ impl std::fmt::Debug for HttpFile {
             .field("size", &self.src.size())
             .field("ranges", &self.supports_ranges())
             .finish()
+    }
+}
+
+/// Gives a new address for a file whose download links expire.
+pub type Renew = Arc<dyn Fn() -> Result<String> + Send + Sync>;
+
+impl HttpFile {
+    /// Opens `url` like [`HttpFile::open`], for a link that expires (a cloud
+    /// drive's download link): once it is `max_age` old, or the server turns
+    /// it away (401, 403, 404, 410), `renew` gives a new one and the read is
+    /// asked again there. A server without ranges reads as [`HttpFile::open`]
+    /// does, from the one link.
+    pub fn open_renewing(
+        client: &HttpClient,
+        url: &str,
+        renew: Renew,
+        max_age: Duration,
+    ) -> Result<Arc<dyn ByteSource>> {
+        let probe = probe(client, url)?;
+        let Probe::Ranged(size, first) = probe else {
+            return Ok(Arc::new(HttpFile::from_probe(
+                client,
+                url.to_string(),
+                probe,
+            )?));
+        };
+        let fetcher = RenewingFetcher {
+            client: client.clone(),
+            size,
+            current: Mutex::new((
+                Arc::new(ranged(client, url.to_string(), size)),
+                Instant::now(),
+            )),
+            renew,
+            max_age,
+        };
+        let src = CachedSource::new(fetcher, &client.opts.cache);
+        let bs = client.opts.cache.block_size.max(4096) as u64;
+        if first.len() as u64 == size.map_or(bs, |s| s.min(bs)) {
+            src.seed(0, first);
+        }
+        Ok(Arc::new(RenewingFile { src }))
+    }
+}
+
+/// The fetcher for a link that honours ranges.
+fn ranged(client: &HttpClient, url: String, size: Option<u64>) -> HttpFetcher {
+    HttpFetcher {
+        client: client.clone(),
+        url,
+        size,
+        ranges: true,
+        stream: Mutex::new(None),
+    }
+}
+
+/// Range fetcher behind [`HttpFile::open_renewing`].
+struct RenewingFetcher {
+    client: HttpClient,
+    size: Option<u64>,
+    /// The link read from, and when it was got.
+    current: Mutex<(Arc<HttpFetcher>, Instant)>,
+    renew: Renew,
+    max_age: Duration,
+}
+
+impl RenewingFetcher {
+    /// The link to read from: a new one first once it is old. A link that
+    /// can't be renewed then is read until the server turns it away.
+    fn current(&self) -> Arc<HttpFetcher> {
+        let (fetcher, at) = lock(&self.current).clone();
+        if at.elapsed() < self.max_age {
+            return fetcher;
+        }
+        self.renewed(&fetcher).unwrap_or_else(|e| {
+            log::debug!("{}: renewing its link: {e}", fetcher.display());
+            let mut current = lock(&self.current);
+            if Arc::ptr_eq(&current.0, &fetcher) {
+                current.1 = Instant::now();
+            }
+            fetcher
+        })
+    }
+
+    /// A new link in place of `stale`, unless another read already got one.
+    fn renewed(&self, stale: &Arc<HttpFetcher>) -> io::Result<Arc<HttpFetcher>> {
+        let mut current = lock(&self.current);
+        if !Arc::ptr_eq(&current.0, stale) {
+            return Ok(current.0.clone());
+        }
+        let url = (self.renew)()?;
+        let fetcher = Arc::new(ranged(&self.client, url, self.size));
+        log::debug!("{}: download link renewed", fetcher.display());
+        *current = (fetcher.clone(), Instant::now());
+        Ok(fetcher)
+    }
+
+    /// Runs `op` on the current link, and once more on a new one when the
+    /// server turned that away.
+    fn with<T>(&self, op: impl Fn(&HttpFetcher) -> Result<T>) -> io::Result<T> {
+        let fetcher = self.current();
+        match op(&fetcher) {
+            Err(Error::Auth(_) | Error::NotFound(_)) => {
+                let renewed = self.renewed(&fetcher)?;
+                Ok(op(&renewed)?)
+            }
+            r => Ok(r?),
+        }
+    }
+}
+
+impl RangeFetch for RenewingFetcher {
+    fn fetch(&self, offset: u64, len: usize) -> io::Result<Vec<u8>> {
+        if len == 0 {
+            return Ok(Vec::new());
+        }
+        self.with(|f| f.fetch_range(offset, len))
+    }
+
+    fn size(&self) -> Option<u64> {
+        self.size
+    }
+
+    fn describe(&self) -> String {
+        lock(&self.current).0.display()
+    }
+
+    fn long_ranges(&self) -> bool {
+        self.size.is_some()
+    }
+
+    fn open_range(&self, offset: u64, len: u64) -> io::Result<RangeBody> {
+        self.with(|f| f.open_long_range(offset, len))
+    }
+}
+
+/// A file read like [`HttpFile`] from links that expire.
+struct RenewingFile {
+    src: CachedSource<RenewingFetcher>,
+}
+
+impl ByteSource for RenewingFile {
+    fn remote(&self) -> bool {
+        true
+    }
+
+    fn net(&self) -> Option<Arc<fp_core::NetCounters>> {
+        self.src.net()
+    }
+
+    fn size(&self) -> Option<u64> {
+        self.src.size()
+    }
+
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
+        self.src.read_at(offset, buf)
+    }
+
+    fn describe(&self) -> String {
+        self.src.describe()
     }
 }
 

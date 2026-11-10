@@ -71,6 +71,9 @@ pub enum SourceKind {
     MediaBrowser,
     /// A Plex Media Server.
     Plex,
+    /// A Microsoft OneDrive.
+    #[serde(rename = "onedrive")]
+    OneDrive,
 }
 
 impl SourceKind {
@@ -88,6 +91,7 @@ impl SourceKind {
             SourceKind::Sftp => "SFTP server",
             SourceKind::MediaBrowser => "Jellyfin/Emby",
             SourceKind::Plex => "Plex",
+            SourceKind::OneDrive => "OneDrive",
         }
     }
 }
@@ -330,6 +334,52 @@ pub struct PlexConfig {
     pub allow_relay: bool,
 }
 
+/// A Microsoft OneDrive, signed in to with a code
+/// ([`crate::onedrive::auth`]).
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+pub struct OneDriveConfig {
+    pub id: String,
+    pub name: String,
+    /// Who signed in, as Microsoft names them (an email address).
+    #[serde(default)]
+    pub account: String,
+    /// The Azure app it signs in as; empty for the one built in
+    /// ([`crate::onedrive::auth::CLIENT_ID`]).
+    #[serde(default)]
+    pub client_id: String,
+    /// The Microsoft directory signed in to: empty for personal accounts
+    /// (`consumers`); `common` or `organizations` for an app registered for
+    /// work accounts too.
+    #[serde(default)]
+    pub tenant: String,
+    pub token: crate::onedrive::auth::OneDriveToken,
+    /// Download several parts of a video at once: much faster on some
+    /// servers, slower on others, so it's off unless chosen.
+    #[serde(default)]
+    pub parallel_downloads: bool,
+}
+
+impl OneDriveConfig {
+    /// The directory signed in to, `consumers` when not set.
+    pub fn tenant(&self) -> &str {
+        match self.tenant.trim() {
+            "" => crate::onedrive::auth::DEFAULT_TENANT,
+            t => t,
+        }
+    }
+}
+
+impl fmt::Debug for OneDriveConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OneDriveConfig")
+            .field("id", &self.id)
+            .field("name", &self.name)
+            .field("account", &self.account)
+            .field("token", &self.token)
+            .finish_non_exhaustive()
+    }
+}
+
 fn plex_relay_default() -> bool {
     true
 }
@@ -438,6 +488,8 @@ pub enum SourceConfig {
     #[serde(rename = "mediabrowser")]
     MediaBrowser(MediaBrowserConfig),
     Plex(PlexConfig),
+    #[serde(rename = "onedrive")]
+    OneDrive(OneDriveConfig),
 }
 
 impl SourceConfig {
@@ -453,6 +505,7 @@ impl SourceConfig {
             SourceConfig::Sftp(c) => &c.id,
             SourceConfig::MediaBrowser(c) => &c.id,
             SourceConfig::Plex(c) => &c.id,
+            SourceConfig::OneDrive(c) => &c.id,
         }
     }
 
@@ -468,6 +521,7 @@ impl SourceConfig {
             SourceConfig::Sftp(c) => &c.name,
             SourceConfig::MediaBrowser(c) => &c.name,
             SourceConfig::Plex(c) => &c.name,
+            SourceConfig::OneDrive(c) => &c.name,
         }
     }
 
@@ -485,6 +539,7 @@ impl SourceConfig {
             SourceConfig::Sftp(_) => SourceKind::Sftp,
             SourceConfig::MediaBrowser(_) => SourceKind::MediaBrowser,
             SourceConfig::Plex(_) => SourceKind::Plex,
+            SourceConfig::OneDrive(_) => SourceKind::OneDrive,
         }
     }
 
@@ -504,6 +559,8 @@ impl SourceConfig {
             SourceConfig::Sftp(c) => crate::sftp::sftp_url(&c.host, c.port, &c.path),
             SourceConfig::MediaBrowser(c) => redact(&c.url),
             SourceConfig::Plex(c) => redact(&c.url),
+            SourceConfig::OneDrive(c) if c.account.is_empty() => "OneDrive".into(),
+            SourceConfig::OneDrive(c) => format!("OneDrive {}", c.account),
         }
     }
 
@@ -664,6 +721,19 @@ mod tests {
                 key_passphrase: "hunter2".into(),
                 host_key: Some("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIA".into()),
             }),
+            SourceConfig::OneDrive(OneDriveConfig {
+                id: "od".into(),
+                name: "OneDrive".into(),
+                account: "alice@outlook.com".into(),
+                client_id: String::new(),
+                tenant: String::new(),
+                token: crate::onedrive::auth::OneDriveToken {
+                    access_token: "hunter2".into(),
+                    refresh_token: "hunter2-refresh".into(),
+                    expires_at: 1,
+                },
+                parallel_downloads: false,
+            }),
         ]
     }
 
@@ -715,6 +785,8 @@ mod tests {
         assert!(j.contains("\"type\":\"deovr\""), "{j}");
         let j = serde_json::to_string(&sample()[4]).unwrap();
         assert!(j.contains("\"type\":\"mediabrowser\""), "{j}");
+        let j = serde_json::to_string(&sample()[5]).unwrap();
+        assert!(j.contains("\"type\":\"onedrive\""), "{j}");
         // Optional fields may be omitted.
         let c: SourceConfig =
             serde_json::from_str(r#"{"type":"http","id":"h","name":"H","url":"http://h/"}"#)

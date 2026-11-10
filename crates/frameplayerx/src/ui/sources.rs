@@ -18,6 +18,7 @@ pub(super) fn kind_icon(kind: SourceKind) -> &'static str {
         SourceKind::MediaBrowser | SourceKind::Plex => icons::MONITOR_PLAY,
         SourceKind::Smb => icons::SHARE_NETWORK,
         SourceKind::Sftp => icons::TERMINAL_WINDOW,
+        SourceKind::OneDrive => icons::CLOUD_ARROW_DOWN,
     }
 }
 
@@ -40,6 +41,7 @@ pub(super) fn kind_label(kind: SourceKind) -> &'static str {
         SourceKind::Sftp => tr!("source-kind-sftp"),
         SourceKind::MediaBrowser => "Jellyfin/Emby",
         SourceKind::Plex => "Plex",
+        SourceKind::OneDrive => "OneDrive",
     }
 }
 
@@ -543,6 +545,7 @@ fn kinds() -> [(SourceKind, &'static str); 10] {
         (SourceKind::Plex, tr!("source-kind-plex-desc")),
         (SourceKind::DeoVr, tr!("source-kind-deovr-desc")),
         (SourceKind::HereSphere, tr!("source-kind-heresphere-desc")),
+        (SourceKind::OneDrive, tr!("source-kind-onedrive-desc")),
         (SourceKind::WebDav, tr!("source-kind-webdav-desc")),
         (SourceKind::Http, tr!("source-kind-http-desc")),
         (SourceKind::Smb, tr!("source-kind-smb-desc")),
@@ -562,7 +565,7 @@ pub(super) fn address_hint(kind: SourceKind) -> &'static str {
         SourceKind::Http => "http://192.168.1.10:8080/videos/",
         SourceKind::Smb => "smb://nas.local/videos",
         SourceKind::Sftp => "sftp://pc.local/~/Videos",
-        SourceKind::Dlna => "",
+        SourceKind::Dlna | SourceKind::OneDrive => "",
     }
 }
 
@@ -570,6 +573,7 @@ pub(super) fn name_hint(kind: SourceKind) -> &'static str {
     match kind {
         SourceKind::MediaBrowser => tr!("source-name-hint-jellyfin"),
         SourceKind::Plex => "Plex",
+        SourceKind::OneDrive => "OneDrive",
         SourceKind::DeoVr => tr!("source-name-hint-deovr"),
         SourceKind::HereSphere => tr!("source-name-hint-heresphere"),
         SourceKind::WebDav => tr!("source-name-hint-webdav"),
@@ -601,6 +605,8 @@ fn add_form(ui: &mut egui::Ui, v: &mut View) {
     };
     let save = if f.kind == SourceKind::Plex {
         super::plex::form(ui, f, id, v.actions)
+    } else if f.kind == SourceKind::OneDrive {
+        super::onedrive::form(ui, f, v.actions)
     } else if let Some(SourceConfig::Dlna(_)) = &editing {
         dlna_edit_form(ui, f, id)
     } else if f.kind == SourceKind::Dlna {
@@ -1177,6 +1183,12 @@ pub fn edit_form(cfg: &SourceConfig) -> SourceForm {
             f.plex.selected = Some(c.clone());
             f.plex.state = super::plex::LinkState::Connected;
         }
+        SourceConfig::OneDrive(c) => {
+            f.parallel_downloads = c.parallel_downloads;
+            f.onedrive.client_id = c.client_id.clone();
+            f.onedrive.selected = Some(c.clone());
+            f.onedrive.state = super::onedrive::LinkState::Connected;
+        }
         SourceConfig::DeoVr(c) | SourceConfig::HereSphere(c) => {
             creds(&c.credentials);
             f.address = c.url.clone();
@@ -1321,6 +1333,14 @@ pub fn build_config(f: &SourceForm, id: String) -> Result<SourceConfig, String> 
             .clone()
             .map(SourceConfig::Plex)
             .ok_or_else(|| tr!("plex-test-required").into());
+    }
+    if f.kind == SourceKind::OneDrive {
+        return f
+            .onedrive
+            .selected
+            .clone()
+            .map(SourceConfig::OneDrive)
+            .ok_or_else(|| tr!("onedrive-sign-in-required").into());
     }
     let address = f.address.trim().to_string();
     if address.is_empty() {
@@ -1500,6 +1520,7 @@ pub fn build_config(f: &SourceForm, id: String) -> Result<SourceConfig, String> 
             })
         }
         SourceKind::Plex => return Err(tr!("plex-test-required").into()),
+        SourceKind::OneDrive => return Err(tr!("onedrive-sign-in-required").into()),
         SourceKind::Dlna => {
             let Some(SourceConfig::Dlna(old)) = &f.editing else {
                 return Err(tr!("source-error-pick-server").into());

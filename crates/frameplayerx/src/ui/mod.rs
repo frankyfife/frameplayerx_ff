@@ -13,6 +13,7 @@ pub mod icons;
 pub mod keyboard;
 pub mod library;
 pub mod local;
+pub mod onedrive;
 pub mod page;
 pub mod perf;
 pub mod player;
@@ -379,6 +380,13 @@ pub enum Action {
         pin: fp_sources::plex::auth::PlexPin,
     },
     PlexConnect(fp_sources::PlexConfig),
+    /// Ask Microsoft for a code to sign in to OneDrive with.
+    OneDriveStart,
+    /// Ask whether the code was entered.
+    OneDrivePoll {
+        generation: u64,
+        code: fp_sources::onedrive::auth::DeviceCode,
+    },
     AddDevice(HapticDeviceConfig),
     RemoveDevice(usize),
     ReconnectDevices,
@@ -676,6 +684,7 @@ pub struct SourceForm {
     pub use_quick_connect: bool,
     pub quick_connect: QuickConnect,
     pub plex: plex::Connect,
+    pub onedrive: onedrive::Connect,
 }
 
 /// Signing in to a Jellyfin/Emby server with Quick Connect.
@@ -717,6 +726,7 @@ impl Default for SourceForm {
             use_quick_connect: true,
             quick_connect: QuickConnect::Idle,
             plex: plex::Connect::default(),
+            onedrive: onedrive::Connect::default(),
         }
     }
 }
